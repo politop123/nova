@@ -1,0 +1,12 @@
+{$DOMAIN} {
+  encode gzip
+
+  @api path /health /api/health /api/v1/*
+  handle @api {
+    reverse_proxy api:4000
+  }
+
+  handle {
+    reverse_proxy web:3000
+  }
+}

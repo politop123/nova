@@ -1,0 +1,84 @@
+name: nova
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: nova
+      POSTGRES_USER: nova
+      POSTGRES_PASSWORD: nova_local_only
+    ports:
+      - '${POSTGRES_HOST_PORT:-5432}:5432'
+    volumes:
+      - nova-postgres:/var/lib/postgresql/data
+      - ../postgres/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nova -d nova']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '${REDIS_HOST_PORT:-6379}:6379'
+    volumes:
+      - nova-redis:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    profiles: ['full']
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        APP: api
+    environment:
+      API_PORT: '4000'
+      DATABASE_URL: postgresql://nova:nova_local_only@postgres:5432/nova
+      REDIS_URL: redis://redis:6379
+      NOVA_TIMEZONE: Europe/Kyiv
+    ports:
+      - '${API_PORT:-4000}:4000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    profiles: ['full']
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        APP: worker
+    environment:
+      DATABASE_URL: postgresql://nova:nova_local_only@postgres:5432/nova
+      REDIS_URL: redis://redis:6379
+      NOVA_TIMEZONE: Europe/Kyiv
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    profiles: ['full']
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.web
+    environment:
+      NUXT_PUBLIC_API_BASE: http://localhost:4000
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    depends_on:
+      - api
+
+volumes:
+  nova-postgres:
+  nova-redis:

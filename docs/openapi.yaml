@@ -1,0 +1,319 @@
+openapi: 3.1.0
+info:
+  title: NOVA Core API
+  version: 0.1.0
+  description: Channel-neutral HTTP contract between the Go core and NOVA clients.
+servers:
+  - url: http://localhost:4000
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          description: API and dependency status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/health:
+    get:
+      operationId: getApiHealth
+      responses:
+        '200':
+          description: API and dependency status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/v1/conversations:
+    get:
+      operationId: listConversations
+      responses:
+        '200':
+          description: Conversations belonging to the current user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversations]
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+    post:
+      operationId: createConversation
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+      responses:
+        '201':
+          description: Created conversation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+  /api/v1/conversations/{conversationId}/messages:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listMessages
+      responses:
+        '200':
+          description: Conversation messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+    post:
+      operationId: createMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1 }
+      responses:
+        '201':
+          description: Persisted user and assistant messages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateMessageResponse'
+        '503':
+          description: OpenAI is not configured.
+        '429':
+          description: Daily or monthly model budget is exhausted.
+  /api/v1/conversations/{conversationId}/messages/stream:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: streamMessage
+      description: Streams response deltas as server-sent events and persists the completed turn.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Server-sent events. Events are ready, delta, done, or error.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '429':
+          description: Daily or monthly model budget is exhausted.
+        '503':
+          description: OpenAI or usage accounting is not configured.
+  /api/v1/memories:
+    get:
+      operationId: listMemories
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Active memories, optionally filtered by full-text search.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memories]
+                properties:
+                  memories:
+                    type: array
+                    items: { $ref: '#/components/schemas/Memory' }
+    post:
+      operationId: createMemory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, content]
+              properties:
+                kind: { type: string, example: preference }
+                content: { type: string, example: The user prefers concise answers. }
+                confidence: { type: number, format: double, minimum: 0, maximum: 1, default: 0.8 }
+                sourceMessageId: { type: string, format: uuid }
+                projectKey: { type: string }
+                expiresAt: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Created memory.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Memory' }
+        '400':
+          description: Invalid memory payload.
+  /api/v1/memories/{memoryId}:
+    parameters:
+      - name: memoryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateMemory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                kind: { type: string }
+                content: { type: string }
+                confidence: { type: number, format: double, minimum: 0, maximum: 1 }
+                projectKey: { type: string }
+                expiresAt: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Updated memory.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Memory' }
+        '404':
+          description: Memory not found.
+    delete:
+      operationId: deleteMemory
+      responses:
+        '204':
+          description: Memory soft-deleted.
+        '404':
+          description: Memory not found.
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [service, status, version, timestamp, checks]
+      properties:
+        service:
+          type: string
+          example: nova-api
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          example: 0.1.0
+        timestamp:
+          type: string
+          format: date-time
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            api: ok
+            postgres: ok
+            redis: ok
+    NovaInput:
+      type: object
+      required: [userId, channel, modality, text, traceId]
+      properties:
+        userId: { type: string }
+        channel: { type: string, enum: [web, telegram, ios, mac, phone] }
+        modality: { type: string, enum: [text, voice] }
+        text: { type: string }
+        traceId: { type: string }
+        conversationId: { type: string }
+        sessionId: { type: string }
+        deviceContext: { type: object, additionalProperties: true }
+    Conversation:
+      type: object
+      required: [id, userId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        title: { type: string }
+        projectKey: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Message:
+      type: object
+      required: [id, conversationId, userId, role, channel, modality, content, traceId, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        role: { type: string, enum: [user, assistant, tool, system] }
+        channel: { type: string, enum: [web, telegram, ios, mac, phone] }
+        modality: { type: string, enum: [text, voice] }
+        content: { type: string }
+        traceId: { type: string }
+        createdAt: { type: string, format: date-time }
+    CreateMessageResponse:
+      type: object
+      required: [conversation, userMessage, assistantMessage, route]
+      properties:
+        conversation: { $ref: '#/components/schemas/Conversation' }
+        userMessage: { $ref: '#/components/schemas/Message' }
+        assistantMessage: { $ref: '#/components/schemas/Message' }
+        route:
+          type: object
+          required: [mode]
+          properties:
+            mode: { type: string, enum: [deterministic, model] }
+            intent: { type: string }
+            tier: { type: string, enum: [simple, medium, strong] }
+            model: { type: string }
+        usage:
+          $ref: '#/components/schemas/NovaUsage'
+    NovaUsage:
+      type: object
+      required: [feature, model, inputTokens, outputTokens, estimatedCostUsd]
+      properties:
+        feature: { type: string, example: chat }
+        model: { type: string, example: gpt-5.6-luna }
+        inputTokens: { type: integer, minimum: 0 }
+        cachedInputTokens: { type: integer, minimum: 0 }
+        outputTokens: { type: integer, minimum: 0 }
+        estimatedCostUsd: { type: number, format: double, minimum: 0 }
+    Memory:
+      type: object
+      required: [id, userId, kind, content, confidence, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        kind: { type: string }
+        content: { type: string }
+        confidence: { type: number, format: double, minimum: 0, maximum: 1 }
+        sourceMessageId: { type: string, format: uuid }
+        projectKey: { type: string }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }

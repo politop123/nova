@@ -1,0 +1,10 @@
+.git
+.DS_Store
+node_modules
+apps/web/node_modules
+apps/web/.nuxt
+apps/web/.output
+dist
+coverage
+.env
+work

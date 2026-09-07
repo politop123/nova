@@ -1,0 +1,177 @@
+name: deploy-dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: nova-dev-deployment
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  verify-and-publish:
+    name: Verify and publish images
+    runs-on: ubuntu-latest
+    outputs:
+      owner: ${{ steps.image-name.outputs.owner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify project
+        run: pnpm verify
+
+      - name: Normalize image owner
+        id: image-name
+        shell: bash
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend images
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.backend
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: APP=api
+          tags: |
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-api:${{ github.sha }}
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-api:dev
+          cache-from: type=gha,scope=nova-api
+          cache-to: type=gha,mode=max,scope=nova-api
+
+      - name: Build and push worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.backend
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: APP=worker
+          tags: |
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-worker:${{ github.sha }}
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-worker:dev
+          cache-from: type=gha,scope=nova-worker
+          cache-to: type=gha,mode=max,scope=nova-worker
+
+      - name: Build and push migration image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.backend
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: APP=migrate
+          tags: |
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-migrate:${{ github.sha }}
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-migrate:dev
+          cache-from: type=gha,scope=nova-migrate
+          cache-to: type=gha,mode=max,scope=nova-migrate
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.web
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-web:${{ github.sha }}
+            ghcr.io/${{ steps.image-name.outputs.owner }}/nova-web:dev
+          cache-from: type=gha,scope=nova-web
+          cache-to: type=gha,mode=max,scope=nova-web
+
+  deploy:
+    name: Deploy to Oracle VM
+    needs: verify-and-publish
+    runs-on: ubuntu-latest
+    environment: development
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      ORACLE_PORT: ${{ secrets.ORACLE_PORT || '22' }}
+      GHCR_OWNER: ${{ needs.verify-and-publish.outputs.owner }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+
+      - name: Load Oracle SSH key
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.ORACLE_SSH_KEY }}
+
+      - name: Trust Oracle host key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "$ORACLE_PORT" -H "$ORACLE_HOST" >> ~/.ssh/known_hosts
+
+      - name: Copy deployment files
+        shell: bash
+        run: |
+          ssh -p "$ORACLE_PORT" "$ORACLE_USER@$ORACLE_HOST" 'mkdir -p /opt/nova/backups && chmod 700 /opt/nova/backups'
+          scp -P "$ORACLE_PORT" infrastructure/docker/docker-compose.prod.yml infrastructure/caddy/Caddyfile infrastructure/ops/deploy-prod.sh infrastructure/ops/backup-postgres.sh infrastructure/ops/install-backup-cron.sh "$ORACLE_USER@$ORACLE_HOST:/opt/nova/"
+
+      - name: Configure image tag without touching secrets
+        shell: bash
+        run: |
+          ssh -p "$ORACLE_PORT" "$ORACLE_USER@$ORACLE_HOST" \
+            "set -eu; touch /opt/nova/.env; chmod 600 /opt/nova/.env; grep -q '^GHCR_OWNER=' /opt/nova/.env && sed -i 's/^GHCR_OWNER=.*/GHCR_OWNER=$GHCR_OWNER/' /opt/nova/.env || echo 'GHCR_OWNER=$GHCR_OWNER' >> /opt/nova/.env; grep -q '^IMAGE_TAG=' /opt/nova/.env && sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/' /opt/nova/.env || echo 'IMAGE_TAG=$IMAGE_TAG' >> /opt/nova/.env"
+
+      - name: Authenticate Oracle to GHCR when a read token is configured
+        if: ${{ secrets.GHCR_READ_TOKEN != '' }}
+        shell: bash
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.repository_owner }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_READ_TOKEN" | ssh -p "$ORACLE_PORT" "$ORACLE_USER@$ORACLE_HOST" \
+            "docker login ghcr.io --username '$GHCR_USERNAME' --password-stdin"
+
+      - name: Deploy and verify health
+        shell: bash
+        run: |
+          ssh -p "$ORACLE_PORT" "$ORACLE_USER@$ORACLE_HOST" \
+            "/opt/nova/deploy-prod.sh '$IMAGE_TAG'"

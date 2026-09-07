@@ -1,0 +1,122 @@
+name: nova
+
+x-backend-environment: &backend-environment
+  APP_ENV: production
+  NOVA_USER_ID: ${NOVA_USER_ID:?NOVA_USER_ID must be set}
+  DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+  REDIS_URL: redis://redis:6379
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_TEXT_MODEL: ${OPENAI_TEXT_MODEL:-gpt-5.6-luna}
+  OPENAI_MEDIUM_MODEL: ${OPENAI_MEDIUM_MODEL:-gpt-5.6-terra}
+  OPENAI_STRONG_MODEL: ${OPENAI_STRONG_MODEL:-gpt-5.6-sol}
+  OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+  NOVA_TIMEZONE: ${NOVA_TIMEZONE:-Europe/Kyiv}
+  DAILY_COST_BUDGET_USD: ${DAILY_COST_BUDGET_USD:-2}
+  MONTHLY_COST_BUDGET_USD: ${MONTHLY_COST_BUDGET_USD:-30}
+
+x-image-pull-policy: &image-pull-policy
+  pull_policy: always
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - nova_postgres_data:/var/lib/postgresql/data
+    expose:
+      - '5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - nova_redis_data:/data
+    expose:
+      - '6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  migrate:
+    image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER must be set}/nova-migrate:${IMAGE_TAG:-dev}
+    profiles: ['migration']
+    <<: *image-pull-policy
+    environment: *backend-environment
+    command: ['/nova', '-schema', '/schema/init.sql']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER must be set}/nova-api:${IMAGE_TAG:-dev}
+    <<: *image-pull-policy
+    restart: unless-stopped
+    environment:
+      <<: *backend-environment
+      API_PORT: '4000'
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost}
+    expose:
+      - '4000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER must be set}/nova-worker:${IMAGE_TAG:-dev}
+    <<: *image-pull-policy
+    restart: unless-stopped
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER must be set}/nova-web:${IMAGE_TAG:-dev}
+    <<: *image-pull-policy
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NUXT_PUBLIC_API_BASE: ${NUXT_PUBLIC_API_BASE:-}
+    expose:
+      - '3000'
+    depends_on:
+      - api
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-:80}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+
+volumes:
+  nova_postgres_data:
+  nova_redis_data:
+  caddy_data:
+  caddy_config:

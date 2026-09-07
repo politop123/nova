@@ -1,0 +1,27 @@
+{
+  "name": "nova",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NOVA personal AI operating system with a Go core and Nuxt web app",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @nova/web dev",
+    "build": "go build ./... && pnpm --filter @nova/web build",
+    "typecheck": "go vet ./... && pnpm --filter @nova/web typecheck",
+    "test": "go test ./... && pnpm --filter @nova/web test",
+    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm format:check",
+    "format": "prettier --write \"**/*.{md,json,yaml,yml,mjs,ts,vue,css}\"",
+    "format:check": "prettier --check \"**/*.{md,json,yaml,yml,mjs,ts,vue,css}\"",
+    "infra:up": "docker compose -f infrastructure/docker/docker-compose.yml up -d postgres redis",
+    "infra:down": "docker compose -f infrastructure/docker/docker-compose.yml down",
+    "infra:full": "docker compose -f infrastructure/docker/docker-compose.yml --profile full up --build",
+    "db:init": "go run ./apps/migrate"
+  },
+  "devDependencies": {
+    "prettier": "3.9.6"
+  }
+}

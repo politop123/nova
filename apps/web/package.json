@@ -1,0 +1,23 @@
+{
+  "name": "@nova/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --port 3000",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@vite-pwa/nuxt": "1.1.1",
+    "nuxt": "4.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.1",
+    "typescript": "5.9.3",
+    "vitest": "5.0.0",
+    "vue-tsc": "3.3.11"
+  }
+}
