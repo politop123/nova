@@ -1,6 +1,8 @@
 package httpserver
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +107,45 @@ func TestTelegramMessageAllowedChecksUserAndChat(t *testing.T) {
 				t.Fatalf("telegramMessageAllowed() = %t, want %t", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDecodeTelegramUpdateAllowsUnknownTelegramFields(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/telegram/webhook", strings.NewReader(`{
+		"update_id": 9001,
+		"message": {
+			"message_id": 42,
+			"message_thread_id": 7,
+			"from": {
+				"id": 100,
+				"is_bot": false,
+				"first_name": "Ілля",
+				"language_code": "uk",
+				"is_premium": true
+			},
+			"chat": {
+				"id": 200,
+				"first_name": "Ілля",
+				"type": "private"
+			},
+			"date": 1788810000,
+			"text": "Привіт",
+			"entities": [
+				{ "offset": 0, "length": 6, "type": "bold" }
+			]
+		}
+	}`))
+	response := httptest.NewRecorder()
+	var update telegram.Update
+
+	if err := decodeTelegramUpdate(response, request, &update); err != nil {
+		t.Fatalf("decode telegram update: %v", err)
+	}
+	if update.UpdateID != 9001 || update.Message == nil || update.Message.Text != "Привіт" {
+		t.Fatalf("unexpected update: %#v", update)
+	}
+	if update.Message.From == nil || update.Message.From.ID != 100 || update.Message.Chat.ID != 200 {
+		t.Fatalf("unexpected telegram sender: %#v", update.Message)
 	}
 }
 

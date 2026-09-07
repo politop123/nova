@@ -14,6 +14,7 @@ interface Conversation {
 interface NovaMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
+  channel?: 'web' | 'telegram' | string;
   content: string;
   createdAt: string;
 }
@@ -65,6 +66,7 @@ const messages = ref<NovaMessage[]>([]);
 const input = ref('');
 const sending = ref(false);
 const streamingText = ref('');
+let messagePoll: number | undefined;
 
 const memories = ref<MemoryRecord[]>([]);
 const memorySearch = ref('');
@@ -139,6 +141,10 @@ onMounted(async () => {
   await bootstrapApp();
 });
 
+onBeforeUnmount(() => {
+  stopMessagePolling();
+});
+
 async function bootstrapApp() {
   try {
     await apiFetch('/health');
@@ -146,9 +152,11 @@ async function bootstrapApp() {
     const result = await apiFetch<{ conversations: Conversation[] }>('/api/v1/conversations');
     conversation.value = result.conversations[0] ?? (await createConversation());
     await Promise.all([loadMessages(), loadMemories(), loadTasks(), loadReminders()]);
+    startMessagePolling();
     markSynced();
   } catch (error: any) {
     apiState.value = 'offline';
+    stopMessagePolling();
     errorMessage.value = normalizeError(error, 'Core недоступний. Перевір сервер NOVA.');
   }
 }
@@ -160,12 +168,54 @@ async function createConversation(): Promise<Conversation> {
   });
 }
 
-async function loadMessages() {
+async function loadMessages(options: { merge?: boolean } = {}) {
   if (!conversation.value) return;
   const result = await apiFetch<{ messages: NovaMessage[] }>(
     `/api/v1/conversations/${conversation.value.id}/messages`,
   );
-  messages.value = result.messages;
+  if (options.merge) {
+    mergeMessages(result.messages);
+  } else {
+    messages.value = result.messages;
+  }
+  markSynced();
+}
+
+function startMessagePolling() {
+  if (messagePoll !== undefined || !conversation.value) return;
+  messagePoll = window.setInterval(() => {
+    void refreshMessagesFromChannels();
+  }, 5000);
+}
+
+function stopMessagePolling() {
+  if (messagePoll === undefined) return;
+  window.clearInterval(messagePoll);
+  messagePoll = undefined;
+}
+
+async function refreshMessagesFromChannels() {
+  if (!conversation.value || sending.value) return;
+  try {
+    await loadMessages({ merge: true });
+  } catch {
+    // Keep the current chat visible when a background refresh misses one beat.
+  }
+}
+
+function mergeMessages(nextMessages: NovaMessage[]) {
+  const merged = new Map(messages.value.map((message) => [message.id, message]));
+  for (const message of nextMessages) {
+    merged.set(message.id, message);
+  }
+  messages.value = Array.from(merged.values()).sort((left, right) => {
+    return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+  });
+}
+
+function upsertMessage(message?: NovaMessage) {
+  if (!message) return;
+  mergeMessages([message]);
 }
 
 async function loadMemories() {
@@ -246,11 +296,11 @@ function consumeSSEFrame(frame: string) {
   if (!event || !data) return;
   const payload = JSON.parse(data);
   if (event === 'ready' && payload.userMessage) {
-    messages.value.push(payload.userMessage);
+    upsertMessage(payload.userMessage);
   } else if (event === 'delta') {
     streamingText.value += payload.text ?? '';
   } else if (event === 'done' && payload.assistantMessage) {
-    messages.value.push(payload.assistantMessage);
+    upsertMessage(payload.assistantMessage);
     streamingText.value = '';
     if (payload.createdMemory) {
       void loadMemories().catch((error: any) => {
@@ -465,6 +515,16 @@ function normalizeError(error: any, fallback: string) {
   if (message.includes('storage')) return 'Сховище тимчасово недоступне.';
   return message;
 }
+
+function messageAuthorLabel(message: NovaMessage) {
+  if (message.role === 'user') {
+    return message.channel === 'telegram' ? 'Ти · Telegram' : 'Ти';
+  }
+  if (message.role === 'assistant') {
+    return message.channel === 'telegram' ? 'NOVA · Telegram' : 'NOVA';
+  }
+  return message.role;
+}
 </script>
 
 <template>
@@ -534,7 +594,7 @@ function normalizeError(error: any, fallback: string) {
             class="message"
             :data-role="message.role"
           >
-            <span>{{ message.role === 'user' ? 'Ти' : 'NOVA' }}</span>
+            <span>{{ messageAuthorLabel(message) }}</span>
             <p>{{ message.content }}</p>
           </article>
           <article v-if="streamingText" class="message" data-role="assistant">

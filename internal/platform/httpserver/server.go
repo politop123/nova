@@ -566,7 +566,7 @@ func (s *Server) telegramWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var update telegram.Update
-	if err := decodeJSON(w, r, &update); err != nil {
+	if err := decodeTelegramUpdate(w, r, &update); err != nil {
 		return
 	}
 	if update.Message == nil {
@@ -1546,6 +1546,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return err
+	}
+	return nil
+}
+
+func decodeTelegramUpdate(w http.ResponseWriter, r *http.Request, destination any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(destination); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid Telegram update")
 		return err
 	}
 	return nil

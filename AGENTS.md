@@ -6,6 +6,8 @@
 - Treat the Web app as an auxiliary management dashboard for chat, memory, tasks, and debugging. The primary daily conversation and notifications channel is Telegram.
 - Telegram must use the same server-side conversation, memory, policy, budget, and audit paths as Web. Do not build separate Telegram-only assistant behavior.
 - Telegram voice messages are first-class input: download them server-side, transcribe them, normalize the transcript into `NovaInput`, then answer through NOVA Core.
+- Telegram webhook decoding must tolerate extra Bot API fields. Keep strict JSON validation for NOVA-owned APIs, but do not reject real Telegram updates because of unknown Telegram payload fields.
+- The Web dashboard should reflect the shared conversation state, including Telegram-originated messages, through lightweight refresh/polling and duplicate-safe message merging.
 - NOVA must be able to send proactive Telegram messages for reminders and important events after the user subscribes to the bot and the allowlist is configured.
 - Natural-language action requests can use arbitrary wording. Run them through the model-backed action planner first when OpenAI is configured; execute only validated typed actions (`memory.save`, `task.create`, `reminder.create`) through server-side Go code. Deterministic parsing is only a fallback for obvious commands or when the planner is unavailable.
 - Critical or missed notifications may later escalate to a phone call, but phone delivery must remain idempotent, auditable, budgeted, and bounded by quiet-hours/importance policy.
