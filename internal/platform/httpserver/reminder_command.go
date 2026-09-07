@@ -26,10 +26,8 @@ func (s *Server) createReminderFromChatCommand(ctx context.Context, userID, chan
 	deliveryMethod := "web"
 	if channel == "telegram" {
 		deliveryMethod = "telegram"
-	} else if s.cfg.TelegramEnabled {
-		if _, ok := s.cfg.TelegramNotificationChatID(); ok {
-			deliveryMethod = "telegram"
-		}
+	} else if s.telegramReadyForDelivery() {
+		deliveryMethod = "telegram"
 	}
 	reminder := storage.Reminder{
 		UserID:         userID,

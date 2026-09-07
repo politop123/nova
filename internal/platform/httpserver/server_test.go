@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"nova.local/core/internal/core"
 	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/platform/config"
 )
@@ -136,5 +137,38 @@ func TestParseReminderCommandRequiresRelativeTime(t *testing.T) {
 	_, err := parseReminderCommand("Нагадай перевірити NOVA", "Europe/Kyiv", time.Now())
 	if err == nil {
 		t.Fatal("expected a validation error")
+	}
+}
+
+func TestPlannerActionHandlingDecisions(t *testing.T) {
+	if !planNeedsHandling(core.ActionPlan{Intent: core.IntentReminderCreate}) {
+		t.Fatal("expected reminder intent to be handled even without actions")
+	}
+	if planNeedsHandling(core.ActionPlan{Intent: core.IntentReply}) {
+		t.Fatal("expected plain reply intent to continue to chat")
+	}
+	if got := clarificationForIntent(core.IntentReminderCreate); !strings.Contains(got, "Коли") {
+		t.Fatalf("unexpected reminder clarification: %q", got)
+	}
+}
+
+func TestDefaultReminderDeliveryMethodPrefersReadyTelegram(t *testing.T) {
+	server := Server{cfg: config.Config{
+		TelegramEnabled:       true,
+		TelegramBotToken:      "configured",
+		TelegramAllowedChatID: "200",
+	}}
+	if got := server.defaultReminderDeliveryMethod(core.ChannelWeb); got != "telegram" {
+		t.Fatalf("delivery method = %q, want telegram", got)
+	}
+}
+
+func TestDefaultReminderDeliveryMethodFallsBackToWebWithoutTelegramToken(t *testing.T) {
+	server := Server{cfg: config.Config{
+		TelegramEnabled:       true,
+		TelegramAllowedChatID: "200",
+	}}
+	if got := server.defaultReminderDeliveryMethod(core.ChannelWeb); got != "web" {
+		t.Fatalf("delivery method = %q, want web", got)
 	}
 }

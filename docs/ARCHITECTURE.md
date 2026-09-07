@@ -5,8 +5,9 @@
 All channels create the same `NovaInput`. NOVA Core owns orchestration, memory retrieval, policy, tools, audit, and output. Web, Telegram, iOS, macOS, and phone adapters must never fork agent behavior.
 
 ```text
-channel -> normalized input -> deterministic route -> compact context
-        -> model decision -> policy -> tools -> audit -> response
+channel -> normalized input -> model action planner -> policy/validation
+        -> typed action executor -> audit -> response
+        -> fallback deterministic route / compact chat context -> model reply
         -> asynchronous summary and memory extraction
 ```
 
@@ -22,6 +23,13 @@ channel -> normalized input -> deterministic route -> compact context
 - Phone: escalation channel for critical or missed notifications in later releases; calls must remain idempotent, auditable, budgeted, and policy-gated.
 
 ## Conversation context and cost safety
+
+The action path first asks a small planner model for a strict JSON plan using the
+current time, timezone, channel, recent messages, and NOVA's capability manifest.
+The model can only propose typed actions; Go validates fields, applies delivery
+defaults, creates durable records, schedules reminders, and writes `agent_actions`
+audit rows. If the plan is a normal reply, NOVA falls back to the existing chat
+path.
 
 The chat path loads a bounded rolling summary plus the most recent messages,
 then sends that compact context to the selected model. After a turn, older

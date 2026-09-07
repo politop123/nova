@@ -38,6 +38,10 @@ type AudioTranscriber interface {
 	TranscribeAudio(ctx context.Context, audio []byte, filename, contentType, language string) (core.ModelResponse, error)
 }
 
+type ActionPlanner interface {
+	PlanActions(ctx context.Context, model, instructions, input string) (core.ActionPlanResponse, error)
+}
+
 type TelegramClient interface {
 	SendMessage(ctx context.Context, chatID int64, text string) error
 	DownloadVoice(ctx context.Context, fileID string) (telegram.VoiceDownload, error)
@@ -52,6 +56,7 @@ type Dependencies struct {
 	ReminderQueue *asynq.Client
 	Telegram      TelegramClient
 	Transcriber   AudioTranscriber
+	Planner       ActionPlanner
 }
 
 type Server struct {
@@ -66,6 +71,7 @@ type Server struct {
 	reminderQueue *asynq.Client
 	telegram      TelegramClient
 	transcriber   AudioTranscriber
+	planner       ActionPlanner
 	mux           *http.ServeMux
 }
 
@@ -86,6 +92,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 		reminderQueue: deps.ReminderQueue,
 		telegram:      deps.Telegram,
 		transcriber:   deps.Transcriber,
+		planner:       deps.Planner,
 		mux:           http.NewServeMux(),
 	}
 	if s.models.Simple == "" {
@@ -203,6 +210,8 @@ type createMessageResponse struct {
 	Assistant    storage.Message      `json:"assistantMessage"`
 	Route        routeResponse        `json:"route"`
 	Usage        *core.NovaUsage      `json:"usage,omitempty"`
+	Memory       *storage.Memory      `json:"createdMemory,omitempty"`
+	Task         *storage.Task        `json:"createdTask,omitempty"`
 	Reminder     *storage.Reminder    `json:"createdReminder,omitempty"`
 }
 
@@ -1106,78 +1115,100 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 		return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", err)
 	}
 
-	route := agent.RouteRequest(agent.Request{Text: text}, s.models)
-	assistantText := deterministicResponse(route.Intent)
+	responseRoute := routeResponse{}
+	assistantText := ""
+	var createdMemory *storage.Memory
+	var createdTask *storage.Task
 	var createdReminder *storage.Reminder
 	var modelUsage *core.NovaUsage
-	modelStartedAt := time.Now()
-	if route.Intent == "reminder.create" {
-		var actionErr *serviceError
-		assistantText, createdReminder, actionErr = s.createReminderFromChatCommand(ctx, userID, channel, text, traceID)
-		if actionErr != nil {
-			return createMessageResponse{}, actionErr
-		}
+
+	planned, serviceErr := s.planAndMaybeExecuteActions(ctx, userID, conversation, channel, modality, text, traceID, userMessage)
+	if serviceErr != nil {
+		return createMessageResponse{}, serviceErr
 	}
-	if route.Mode == "model" {
-		if s.responder == nil {
-			return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured", nil)
+	if planned.Handled {
+		assistantText = planned.AssistantText
+		modelUsage = planned.Usage
+		createdMemory = planned.CreatedMemory
+		createdTask = planned.CreatedTask
+		createdReminder = planned.CreatedReminder
+		responseRoute = routeResponse{Mode: "planner", Intent: planned.Intent, Model: stringOrEmpty(s.cfg.OpenAIPlannerModel)}
+	} else {
+		route := agent.RouteRequest(agent.Request{Text: text}, s.models)
+		responseRoute = routeResponse{
+			Mode: stringOrEmpty(route.Mode), Intent: stringOrEmpty(route.Intent),
+			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
 		}
-		messages, listErr := s.store.ListMessages(ctx, userID, conversationID, 100)
-		if listErr != nil {
-			return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", listErr)
-		}
-		modelInput, listErr := s.buildModelInput(ctx, userID, conversationID, messages)
-		if listErr != nil {
-			return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", listErr)
-		}
-		estimatedUsage := usage.EstimateRequest(route.Model, agent.SystemProfile+"\n"+modelInput, 512)
-		if err := s.checkBudget(ctx, userID, estimatedUsage.EstimatedCostUSD); err != nil {
-			if errors.Is(err, errBudgetExceeded) {
-				return createMessageResponse{}, newServiceError(http.StatusTooManyRequests, "NOVA budget limit reached; try again after the budget period resets", err)
+		assistantText = deterministicResponse(route.Intent)
+		modelStartedAt := time.Now()
+		if route.Intent == "reminder.create" {
+			var actionErr *serviceError
+			assistantText, createdReminder, actionErr = s.createReminderFromChatCommand(ctx, userID, channel, text, traceID)
+			if actionErr != nil {
+				return createMessageResponse{}, actionErr
 			}
-			s.logger.Error("budget check failed", "trace_id", traceID, "error", err)
-			return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "budget check is temporarily unavailable", err)
 		}
-		if usageResponder, ok := s.responder.(UsageResponder); ok {
-			var result core.ModelResponse
-			result, err = usageResponder.RespondWithModelUsage(ctx, route.Model, agent.SystemProfile, modelInput)
-			assistantText = result.Text
-			modelUsage = &result.Usage
-		} else {
-			assistantText, err = s.responder.RespondWithModel(ctx, route.Model, agent.SystemProfile, modelInput)
-			estimatedUsage = usage.EstimateResponse(route.Model, modelInput, assistantText)
-			modelUsage = &estimatedUsage
-		}
-		if err != nil {
-			s.logger.Error("model response failed", "trace_id", traceID, "error", err)
-			return createMessageResponse{}, newServiceError(http.StatusBadGateway, "model response failed", err)
-		}
-		if modelUsage == nil {
-			modelUsage = &estimatedUsage
-		}
-		if modelUsage.InputTokens == 0 {
-			modelUsage.InputTokens = estimatedUsage.InputTokens
-		}
-		if modelUsage.OutputTokens == 0 {
-			modelUsage.OutputTokens = usage.EstimateTokens(assistantText)
-		}
-		modelUsage.Model = route.Model
-		modelUsage.Feature = "chat"
-		modelUsage.EstimatedCostUSD = usage.EstimateCost(
-			modelUsage.Model,
-			modelUsage.InputTokens,
-			modelUsage.CachedInputTokens,
-			modelUsage.OutputTokens,
-		)
-		if err := s.store.RecordUsageEvent(ctx, storage.UsageEvent{
-			UserID: userID, Feature: modelUsage.Feature, Model: modelUsage.Model,
-			InputTokens: modelUsage.InputTokens, CachedInputTokens: modelUsage.CachedInputTokens,
-			OutputTokens: modelUsage.OutputTokens, EstimatedCostUSD: modelUsage.EstimatedCostUSD,
-			LatencyMS: int(time.Since(modelStartedAt) / time.Millisecond),
-			TraceID:   traceID,
-		}); err != nil {
-			s.logger.Error("usage event failed", "trace_id", traceID, "error", err)
-			return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "usage accounting is temporarily unavailable", err)
+		if route.Mode == "model" {
+			if s.responder == nil {
+				return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured", nil)
+			}
+			messages, listErr := s.store.ListMessages(ctx, userID, conversationID, 100)
+			if listErr != nil {
+				return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", listErr)
+			}
+			modelInput, listErr := s.buildModelInput(ctx, userID, conversationID, messages)
+			if listErr != nil {
+				return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", listErr)
+			}
+			estimatedUsage := usage.EstimateRequest(route.Model, agent.SystemProfile+"\n"+modelInput, 512)
+			if err := s.checkBudget(ctx, userID, estimatedUsage.EstimatedCostUSD); err != nil {
+				if errors.Is(err, errBudgetExceeded) {
+					return createMessageResponse{}, newServiceError(http.StatusTooManyRequests, "NOVA budget limit reached; try again after the budget period resets", err)
+				}
+				s.logger.Error("budget check failed", "trace_id", traceID, "error", err)
+				return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "budget check is temporarily unavailable", err)
+			}
+			if usageResponder, ok := s.responder.(UsageResponder); ok {
+				var result core.ModelResponse
+				result, err = usageResponder.RespondWithModelUsage(ctx, route.Model, agent.SystemProfile, modelInput)
+				assistantText = result.Text
+				modelUsage = &result.Usage
+			} else {
+				assistantText, err = s.responder.RespondWithModel(ctx, route.Model, agent.SystemProfile, modelInput)
+				estimatedUsage = usage.EstimateResponse(route.Model, modelInput, assistantText)
+				modelUsage = &estimatedUsage
+			}
+			if err != nil {
+				s.logger.Error("model response failed", "trace_id", traceID, "error", err)
+				return createMessageResponse{}, newServiceError(http.StatusBadGateway, "model response failed", err)
+			}
+			if modelUsage == nil {
+				modelUsage = &estimatedUsage
+			}
+			if modelUsage.InputTokens == 0 {
+				modelUsage.InputTokens = estimatedUsage.InputTokens
+			}
+			if modelUsage.OutputTokens == 0 {
+				modelUsage.OutputTokens = usage.EstimateTokens(assistantText)
+			}
+			modelUsage.Model = route.Model
+			modelUsage.Feature = "chat"
+			modelUsage.EstimatedCostUSD = usage.EstimateCost(
+				modelUsage.Model,
+				modelUsage.InputTokens,
+				modelUsage.CachedInputTokens,
+				modelUsage.OutputTokens,
+			)
+			if err := s.store.RecordUsageEvent(ctx, storage.UsageEvent{
+				UserID: userID, Feature: modelUsage.Feature, Model: modelUsage.Model,
+				InputTokens: modelUsage.InputTokens, CachedInputTokens: modelUsage.CachedInputTokens,
+				OutputTokens: modelUsage.OutputTokens, EstimatedCostUSD: modelUsage.EstimatedCostUSD,
+				LatencyMS: int(time.Since(modelStartedAt) / time.Millisecond),
+				TraceID:   traceID,
+			}); err != nil {
+				s.logger.Error("usage event failed", "trace_id", traceID, "error", err)
+				return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "usage accounting is temporarily unavailable", err)
+			}
 		}
 	}
 
@@ -1198,12 +1229,11 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 		Conversation: conversation,
 		UserMessage:  userMessage,
 		Assistant:    assistantMessage,
-		Route: routeResponse{
-			Mode: stringOrEmpty(route.Mode), Intent: stringOrEmpty(route.Intent),
-			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
-		},
-		Usage:    modelUsage,
-		Reminder: createdReminder,
+		Route:        responseRoute,
+		Usage:        modelUsage,
+		Memory:       createdMemory,
+		Task:         createdTask,
+		Reminder:     createdReminder,
 	}, nil
 }
 
@@ -1282,45 +1312,70 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	route := agent.RouteRequest(agent.Request{Text: request.Text}, s.models)
+	responseRoute := routeResponse{}
+	assistantText := ""
+	var createdMemory *storage.Memory
+	var createdTask *storage.Task
 	var createdReminder *storage.Reminder
-	deterministicAssistantText := deterministicResponse(route.Intent)
+	var modelUsage *core.NovaUsage
+	var route agent.Route
 	var messages []storage.Message
 	var modelInput string
 	var estimatedUsage core.NovaUsage
 	modelStartedAt := time.Now()
-	if route.Intent == "reminder.create" {
-		var actionErr *serviceError
-		deterministicAssistantText, createdReminder, actionErr = s.createReminderFromChatCommand(r.Context(), userID, "web", request.Text, traceID)
-		if actionErr != nil {
-			s.writeServiceError(w, actionErr)
-			return
-		}
+
+	planned, serviceErr := s.planAndMaybeExecuteActions(r.Context(), userID, conversation, "web", core.ModalityText, request.Text, traceID, userMessage)
+	if serviceErr != nil {
+		s.writeServiceError(w, serviceErr)
+		return
 	}
-	if route.Mode == "model" {
-		if s.responder == nil {
-			writeError(w, http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured")
-			return
+	if planned.Handled {
+		assistantText = planned.AssistantText
+		modelUsage = planned.Usage
+		createdMemory = planned.CreatedMemory
+		createdTask = planned.CreatedTask
+		createdReminder = planned.CreatedReminder
+		responseRoute = routeResponse{Mode: "planner", Intent: planned.Intent, Model: stringOrEmpty(s.cfg.OpenAIPlannerModel)}
+	} else {
+		route = agent.RouteRequest(agent.Request{Text: request.Text}, s.models)
+		responseRoute = routeResponse{
+			Mode: stringOrEmpty(route.Mode), Intent: stringOrEmpty(route.Intent),
+			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
 		}
-		messages, err = s.store.ListMessages(r.Context(), userID, conversationID, 100)
-		if err != nil {
-			s.writeStorageError(w, err)
-			return
-		}
-		modelInput, err = s.buildModelInput(r.Context(), userID, conversationID, messages)
-		if err != nil {
-			s.writeStorageError(w, err)
-			return
-		}
-		estimatedUsage = usage.EstimateRequest(route.Model, agent.SystemProfile+"\n"+modelInput, 512)
-		if err := s.checkBudget(r.Context(), userID, estimatedUsage.EstimatedCostUSD); err != nil {
-			if errors.Is(err, errBudgetExceeded) {
-				writeError(w, http.StatusTooManyRequests, "NOVA budget limit reached; try again after the budget period resets")
+		assistantText = deterministicResponse(route.Intent)
+		if route.Intent == "reminder.create" {
+			var actionErr *serviceError
+			assistantText, createdReminder, actionErr = s.createReminderFromChatCommand(r.Context(), userID, "web", request.Text, traceID)
+			if actionErr != nil {
+				s.writeServiceError(w, actionErr)
 				return
 			}
-			s.logger.Error("budget check failed", "trace_id", traceID, "error", err)
-			writeError(w, http.StatusServiceUnavailable, "budget check is temporarily unavailable")
-			return
+		}
+		if route.Mode == "model" {
+			if s.responder == nil {
+				writeError(w, http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured")
+				return
+			}
+			messages, err = s.store.ListMessages(r.Context(), userID, conversationID, 100)
+			if err != nil {
+				s.writeStorageError(w, err)
+				return
+			}
+			modelInput, err = s.buildModelInput(r.Context(), userID, conversationID, messages)
+			if err != nil {
+				s.writeStorageError(w, err)
+				return
+			}
+			estimatedUsage = usage.EstimateRequest(route.Model, agent.SystemProfile+"\n"+modelInput, 512)
+			if err := s.checkBudget(r.Context(), userID, estimatedUsage.EstimatedCostUSD); err != nil {
+				if errors.Is(err, errBudgetExceeded) {
+					writeError(w, http.StatusTooManyRequests, "NOVA budget limit reached; try again after the budget period resets")
+					return
+				}
+				s.logger.Error("budget check failed", "trace_id", traceID, "error", err)
+				writeError(w, http.StatusServiceUnavailable, "budget check is temporarily unavailable")
+				return
+			}
 		}
 	}
 
@@ -1337,8 +1392,6 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	assistantText := deterministicAssistantText
-	var modelUsage *core.NovaUsage
 	if route.Mode == "model" {
 		if streamResponder, ok := s.responder.(StreamResponder); ok {
 			var result core.ModelResponse
@@ -1413,12 +1466,11 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 		Conversation: conversation,
 		UserMessage:  userMessage,
 		Assistant:    assistantMessage,
-		Route: routeResponse{
-			Mode: stringOrEmpty(route.Mode), Intent: stringOrEmpty(route.Intent),
-			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
-		},
-		Usage:    modelUsage,
-		Reminder: createdReminder,
+		Route:        responseRoute,
+		Usage:        modelUsage,
+		Memory:       createdMemory,
+		Task:         createdTask,
+		Reminder:     createdReminder,
 	})
 }
 

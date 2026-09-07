@@ -17,6 +17,7 @@ type Config struct {
 	RedisURL              string
 	OpenAIAPIKey          string
 	OpenAITextModel       string
+	OpenAIPlannerModel    string
 	OpenAIMediumModel     string
 	OpenAIStrongModel     string
 	OpenAIEmbeddingModel  string
@@ -53,6 +54,7 @@ func Load() (Config, error) {
 		RedisURL:              stringEnv("REDIS_URL", "redis://localhost:6379"),
 		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
 		OpenAITextModel:       stringEnv("OPENAI_TEXT_MODEL", "gpt-5.6-luna"),
+		OpenAIPlannerModel:    stringEnv("OPENAI_PLANNER_MODEL", stringEnv("OPENAI_TEXT_MODEL", "gpt-5.6-luna")),
 		OpenAIMediumModel:     stringEnv("OPENAI_MEDIUM_MODEL", "gpt-5.6-terra"),
 		OpenAIStrongModel:     stringEnv("OPENAI_STRONG_MODEL", "gpt-5.6-sol"),
 		OpenAIEmbeddingModel:  stringEnv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),

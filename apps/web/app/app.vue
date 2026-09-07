@@ -252,6 +252,16 @@ function consumeSSEFrame(frame: string) {
   } else if (event === 'done' && payload.assistantMessage) {
     messages.value.push(payload.assistantMessage);
     streamingText.value = '';
+    if (payload.createdMemory) {
+      void loadMemories().catch((error: any) => {
+        errorMessage.value = normalizeError(error, 'Памʼять створено, але список не оновився.');
+      });
+    }
+    if (payload.createdTask) {
+      void loadTasks().catch((error: any) => {
+        errorMessage.value = normalizeError(error, 'Задачу створено, але список не оновився.');
+      });
+    }
     if (payload.createdReminder) {
       void loadReminders().catch((error: any) => {
         errorMessage.value = normalizeError(error, 'Нагадування створено, але список не оновився.');

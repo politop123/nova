@@ -8,6 +8,7 @@
 
 ## Actions
 
+- Treat model plans as proposals only. The Go backend validates every typed action, applies policy and idempotency, and writes an audit record before any state-changing execution.
 - READ actions may execute automatically within the authenticated user's scope.
 - WRITE actions may execute automatically only when reversible and explicitly allowed by policy.
 - CONFIRM actions require explicit approval for the exact payload before external communication, deletion, cancellation, payment, or another irreversible effect.

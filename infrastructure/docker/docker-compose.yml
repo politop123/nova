@@ -42,6 +42,12 @@ services:
       DATABASE_URL: postgresql://nova:nova_local_only@postgres:5432/nova
       REDIS_URL: redis://redis:6379
       NOVA_TIMEZONE: Europe/Kyiv
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TEXT_MODEL: ${OPENAI_TEXT_MODEL:-gpt-5.6-luna}
+      OPENAI_PLANNER_MODEL: ${OPENAI_PLANNER_MODEL:-gpt-5.6-luna}
+      OPENAI_MEDIUM_MODEL: ${OPENAI_MEDIUM_MODEL:-gpt-5.6-terra}
+      OPENAI_STRONG_MODEL: ${OPENAI_STRONG_MODEL:-gpt-5.6-sol}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       OPENAI_TRANSCRIBE_MODEL: gpt-4o-mini-transcribe
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -67,6 +73,12 @@ services:
       DATABASE_URL: postgresql://nova:nova_local_only@postgres:5432/nova
       REDIS_URL: redis://redis:6379
       NOVA_TIMEZONE: Europe/Kyiv
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TEXT_MODEL: ${OPENAI_TEXT_MODEL:-gpt-5.6-luna}
+      OPENAI_PLANNER_MODEL: ${OPENAI_PLANNER_MODEL:-gpt-5.6-luna}
+      OPENAI_MEDIUM_MODEL: ${OPENAI_MEDIUM_MODEL:-gpt-5.6-terra}
+      OPENAI_STRONG_MODEL: ${OPENAI_STRONG_MODEL:-gpt-5.6-sol}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       OPENAI_TRANSCRIBE_MODEL: gpt-4o-mini-transcribe
       TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}

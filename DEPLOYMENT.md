@@ -48,6 +48,7 @@ POSTGRES_DB=nova
 POSTGRES_USER=nova
 POSTGRES_PASSWORD=replace-with-a-long-random-password
 OPENAI_API_KEY=
+OPENAI_PLANNER_MODEL=gpt-5.6-luna
 OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 NOVA_TIMEZONE=Europe/Kyiv
 DAILY_COST_BUDGET_USD=2
@@ -73,7 +74,7 @@ sudoedit .env
 docker compose --env-file .env -f docker-compose.prod.yml up -d api worker
 ```
 
-Set `OPENAI_API_KEY` in that file and keep the existing daily and monthly budget limits. Do not paste the key into source files, commits, logs, or browser-visible frontend configuration.
+Set `OPENAI_API_KEY` in that file and keep the existing daily and monthly budget limits. `OPENAI_PLANNER_MODEL` controls the small structured-output planner that turns natural user wording into typed NOVA actions before normal chat fallback. Do not paste the key into source files, commits, logs, or browser-visible frontend configuration.
 
 ## Telegram bot
 

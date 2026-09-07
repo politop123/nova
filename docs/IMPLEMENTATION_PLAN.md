@@ -26,8 +26,8 @@ Exit: Web can send and stream a response; every message is stored with user, con
 
 ### Phase 2 Agent runtime and cost guardrails
 
-1. Add deterministic routing for obvious commands before any model call.
-2. Build the model router with Luna as default and explicit Terra and Sol escalation rules.
+1. Add deterministic routing for obvious commands before any model call. **Adjusted:** deterministic routing remains as a fallback; the primary path now uses a model-backed structured action planner when OpenAI is configured.
+2. Build the model router with Luna as default and explicit Terra and Sol escalation rules. **Foundation done:** chat replies use the model router; action planning uses `OPENAI_PLANNER_MODEL`.
 3. Enforce per-feature input and output budgets before requests. **Foundation done:** chat requests reserve a conservative input plus 512-token output estimate before calling a model.
 4. Record `usage_events`, estimated cost, latency, feature, model, and cached tokens. **Done for chat:** token counts (including cached tokens), model, feature, trace ID, cost, and provider latency are persisted.
 5. Add daily and monthly circuit breakers. **Done for chat:** requests are denied with HTTP 429 when either configured limit would be exceeded.
@@ -50,7 +50,7 @@ Exit: NOVA answers a question using an old fact without sending the full history
 1. Implement the typed Tool Registry.
 2. Enforce READ, WRITE, and CONFIRM policy before execution.
 3. Add idempotency for repeatable write operations.
-4. Record proposed, confirmed, executed, failed, and cancelled actions.
+4. Record proposed, confirmed, executed, failed, and cancelled actions. **Foundation done:** planner-executed memory, task, and reminder actions write `agent_actions` audit records with hashes and idempotency keys.
 5. Implement initial tools: memory search/save, task create/complete, reminder create/update/delete, notification send, and conversation search.
 
 Exit: no CONFIRM action runs without a short-lived explicit approval tied to the exact action payload.
@@ -69,7 +69,7 @@ Exit: create, edit, cancel, and receive a reminder reliably across restarts.
 
 1. Verify the configured Telegram allowlist. **Foundation done:** the webhook checks `TELEGRAM_ALLOWED_USER_ID` and/or `TELEGRAM_ALLOWED_CHAT_ID` when configured.
 2. Normalize incoming text and voice-message transcripts into `NovaInput`. **Foundation done:** text updates route directly; voice updates are downloaded and transcribed server-side before routing.
-3. Route Telegram and Web through the same conversation service. **Foundation done:** Telegram uses the same stored conversation, routing, compact context, model budget, usage accounting, and message persistence path as Web.
+3. Route Telegram and Web through the same conversation service. **Foundation done:** Telegram uses the same stored conversation, planner/action execution, routing fallback, compact context, model budget, usage accounting, and message persistence path as Web.
 4. Deliver proactive reminders and confirmation buttons. **Partial:** proactive Telegram reminder delivery is wired for scheduled reminders; confirmation buttons are next.
 5. Reject replayed callbacks and untrusted users.
 

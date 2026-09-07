@@ -118,6 +118,19 @@ type ReminderUpdate struct {
 	Status            *string
 }
 
+type AgentAction struct {
+	ID             string    `json:"id"`
+	UserID         string    `json:"userId"`
+	TraceID        string    `json:"traceId"`
+	ActionName     string    `json:"actionName"`
+	Status         string    `json:"status"`
+	ArgumentsHash  string    `json:"argumentsHash,omitempty"`
+	IdempotencyKey string    `json:"idempotencyKey,omitempty"`
+	Reason         string    `json:"reason,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
 type UsageEvent struct {
 	UserID            string
 	Feature           string
@@ -489,6 +502,32 @@ func (s *Store) CancelTask(ctx context.Context, userID, taskID string) error {
 		Status: &status, CompletedAt: &now, CompletedAtSet: true,
 	})
 	return err
+}
+
+func (s *Store) RecordAgentAction(ctx context.Context, action AgentAction) (AgentAction, error) {
+	if s == nil || s.db == nil {
+		return AgentAction{}, errors.New("database is not configured")
+	}
+	var result AgentAction
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO agent_actions (
+			user_id, trace_id, action_name, status, arguments_hash, idempotency_key, reason
+		)
+		VALUES (
+			$1::uuid, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, '')
+		)
+		RETURNING id::text, user_id::text, trace_id, action_name, status::text,
+			COALESCE(arguments_hash, ''), COALESCE(idempotency_key, ''), COALESCE(reason, ''),
+			created_at, updated_at
+	`, action.UserID, action.TraceID, action.ActionName, action.Status, action.ArgumentsHash,
+		action.IdempotencyKey, action.Reason).Scan(
+		&result.ID, &result.UserID, &result.TraceID, &result.ActionName, &result.Status,
+		&result.ArgumentsHash, &result.IdempotencyKey, &result.Reason, &result.CreatedAt, &result.UpdatedAt,
+	)
+	if err != nil {
+		return AgentAction{}, fmt.Errorf("record agent action: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Store) CreateReminder(ctx context.Context, reminder Reminder, idempotencyKey string) (Reminder, error) {

@@ -85,6 +85,7 @@ func main() {
 			ReminderQueue: reminderQueue,
 			Telegram:      telegramClient,
 			Transcriber:   responder,
+			Planner:       responder,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

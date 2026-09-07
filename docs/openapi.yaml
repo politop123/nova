@@ -488,12 +488,16 @@ components:
           type: object
           required: [mode]
           properties:
-            mode: { type: string, enum: [deterministic, model] }
+            mode: { type: string, enum: [deterministic, planner, model] }
             intent: { type: string }
             tier: { type: string, enum: [simple, medium, strong] }
             model: { type: string }
         usage:
           $ref: '#/components/schemas/NovaUsage'
+        createdMemory:
+          $ref: '#/components/schemas/Memory'
+        createdTask:
+          $ref: '#/components/schemas/Task'
         createdReminder:
           $ref: '#/components/schemas/Reminder'
     NovaUsage:
