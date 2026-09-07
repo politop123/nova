@@ -175,3 +175,10 @@ jobs:
         run: |
           ssh -p "$ORACLE_PORT" "$ORACLE_USER@$ORACLE_HOST" \
             "/opt/nova/deploy-prod.sh '$IMAGE_TAG'"
+
+      - name: Remove short-lived GHCR credentials
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          ssh -p "$ORACLE_PORT" "$ORACLE_USER@$ORACLE_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true" || true

@@ -60,15 +60,23 @@ The workflow preserves the other values in this file. Keep all provider and data
 
 ## Domain and Cloudflare
 
-The deployment works first by IP with `DOMAIN=:80` and `WEB_ORIGIN=http://SERVER_IP`.
+The live public URL is `https://nova-app.i-shevchhuukk.workers.dev`. A small Cloudflare Worker terminates HTTPS and forwards requests to the Oracle VM. Its versioned source and Wrangler configuration are in `infrastructure/cloudflare/`.
 
-For a domain you already own and manage in Cloudflare:
+Cloudflare Workers cannot fetch a numeric IP directly, so the Worker uses `nova.79-76-109-43.sslip.io`, which resolves to the VM IP. The stable user-facing address remains the `workers.dev` URL. The VM must keep:
 
-1. Create an `A` record such as `nova.example.com` pointing to the VM public IP. Keep the record proxied only after the origin responds correctly.
-2. Set `DOMAIN=nova.example.com` and `WEB_ORIGIN=https://nova.example.com` in `/opt/nova/.env`.
-3. Caddy obtains and renews the HTTPS certificate automatically. In Cloudflare, use SSL/TLS mode `Full (strict)` once the origin certificate is active.
+```dotenv
+DOMAIN=:80
+WEB_ORIGIN=https://nova-app.i-shevchhuukk.workers.dev
+```
 
-Cloudflare DNS is free, but Cloudflare does not provide a permanent custom domain registration for free. A Quick Tunnel gives a random `trycloudflare.com` hostname and is temporary, so it is not suitable as the stable project URL. A stable Cloudflare Tunnel requires a Cloudflare account, a chosen hostname, and a tunnel token kept only on the VM; those credentials are not present in this workspace, so the current production path uses the VM IP/Caddy fallback.
+To deploy a Worker change after authenticating Wrangler:
+
+```sh
+cd infrastructure/cloudflare
+npx wrangler deploy
+```
+
+If a custom domain is purchased later, attach it to the same Worker and replace `WEB_ORIGIN` with that HTTPS hostname. No application code change is required.
 
 ## Deploy and rollback
 
