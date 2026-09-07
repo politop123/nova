@@ -46,6 +46,27 @@ func (s *Server) planAndMaybeExecuteActions(
 	traceID string,
 	userMessage storage.Message,
 ) (plannedActionResult, *serviceError) {
+	if action, ok := deterministicPersonalFactMemoryAction(text); ok && agent.DetectDeterministicIntent(text) == "" {
+		plan := core.ActionPlan{
+			Intent:     core.IntentMemorySave,
+			Confidence: 1,
+			Actions:    []core.NovaAction{action},
+		}
+		executed, actionErr := s.executeActionPlan(ctx, userID, channel, traceID, userMessage, plan)
+		if actionErr != nil {
+			return plannedActionResult{}, actionErr
+		}
+		reply := strings.Join(executed.replies, "\n")
+		if reply == "" {
+			reply = "Запамʼятала."
+		}
+		return plannedActionResult{
+			Handled:       true,
+			Intent:        core.IntentMemorySave,
+			AssistantText: reply,
+			CreatedMemory: executed.createdMemory,
+		}, nil
+	}
 	if s.planner == nil {
 		return plannedActionResult{}, nil
 	}

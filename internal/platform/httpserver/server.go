@@ -1212,6 +1212,7 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 		}
 	}
 
+	assistantText = ensureMissingPersonalFactInvitation(text, assistantText)
 	assistantMessage, err := s.store.AddMessage(ctx, storage.Message{
 		ConversationID: conversationID,
 		UserID:         userID,
@@ -1447,6 +1448,7 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	assistantText = ensureMissingPersonalFactInvitation(request.Text, assistantText)
 	assistantMessage, err := s.store.AddMessage(r.Context(), storage.Message{
 		ConversationID: conversationID,
 		UserID:         userID,

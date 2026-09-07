@@ -193,6 +193,51 @@ func TestPlannerActionHandlingDecisions(t *testing.T) {
 	}
 }
 
+func TestMissingPersonalFactInvitation(t *testing.T) {
+	got := ensureMissingPersonalFactInvitation(
+		"Скажи, будь ласка, мій номер телефону",
+		"Я не знаю твій номер телефону.",
+	)
+	if !strings.Contains(got, "Поділись цим номером") || !strings.Contains(got, "запамʼятаю") {
+		t.Fatalf("expected learning invitation, got %q", got)
+	}
+
+	alreadyHelpful := "Я ще не знаю твій номер. Поділись ним, і я запамʼятаю."
+	if got := ensureMissingPersonalFactInvitation("Який номер дружини?", alreadyHelpful); got != alreadyHelpful {
+		t.Fatalf("expected existing invitation to stay unchanged, got %q", got)
+	}
+
+	known := "Твій номер телефону: +380501112233."
+	if got := ensureMissingPersonalFactInvitation("Який мій номер телефону?", known); got != known {
+		t.Fatalf("expected known answer to stay unchanged, got %q", got)
+	}
+}
+
+func TestDeterministicPersonalFactMemoryAction(t *testing.T) {
+	action, ok := deterministicPersonalFactMemoryAction("Мій номер телефону +380 50 111 22 33")
+	if !ok {
+		t.Fatal("expected phone memory action")
+	}
+	if action.Type != core.ActionMemorySave || action.Kind != "fact" {
+		t.Fatalf("unexpected action metadata: %#v", action)
+	}
+	if !strings.Contains(action.Content, "Номер телефону користувача") || !strings.Contains(action.Content, "+380 50 111 22 33") {
+		t.Fatalf("unexpected phone memory content: %q", action.Content)
+	}
+
+	action, ok = deterministicPersonalFactMemoryAction("Email дружини: partner@example.com")
+	if !ok {
+		t.Fatal("expected email memory action")
+	}
+	if !strings.Contains(action.Content, "Email дружини користувача") || !strings.Contains(action.Content, "partner@example.com") {
+		t.Fatalf("unexpected email memory content: %q", action.Content)
+	}
+
+	if _, ok := deterministicPersonalFactMemoryAction("Скажи мій номер телефону?"); ok {
+		t.Fatal("did not expect memory action for a question without a fact")
+	}
+}
+
 func TestDefaultReminderDeliveryMethodPrefersReadyTelegram(t *testing.T) {
 	server := Server{cfg: config.Config{
 		TelegramEnabled:       true,
