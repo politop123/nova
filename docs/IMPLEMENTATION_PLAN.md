@@ -41,7 +41,7 @@ Exit: every model request is attributable and budgeted; a limit stops loops befo
 3. Store source message, confidence, scope, and expiry.
 4. Generate embeddings and retrieve top-K relevant memories.
 5. Assemble a compact prompt from profile, summary, memories, and recent messages. **Foundation done:** active memories can be created, searched, edited, soft-deleted, and injected into the bounded model context with confidence and source provenance.
-6. Provide a memory dashboard for view, edit, and delete. **API foundation done:** the memory CRUD contract is available; the visual dashboard remains next.
+6. Provide a memory dashboard for view, edit, and delete. **Done:** the Ukrainian Nuxt workspace can create, search, edit, and soft-delete memories through the Go API.
 
 Exit: NOVA answers a question using an old fact without sending the full history and shows which memory supported the answer.
 
@@ -57,11 +57,11 @@ Exit: no CONFIRM action runs without a short-lived explicit approval tied to the
 
 ### Phase 5 Tasks, reminders, and proactive delivery
 
-1. Add task and reminder APIs with timezone-aware parsing.
-2. Schedule deterministic BullMQ jobs.
-3. Deliver reminders without an LLM call when stored text is sufficient.
-4. Add retries, dead-letter handling, cancellation, and idempotent delivery.
-5. Record notification and delivery status.
+1. Add task and reminder APIs with timezone-aware parsing. **Done:** Go endpoints accept RFC3339 or local datetimes interpreted in the user's timezone.
+2. Schedule deterministic BullMQ jobs. **Adjusted for Go:** reminders are scheduled through Asynq/Redis.
+3. Deliver reminders without an LLM call when stored text is sufficient. **Done:** the worker marks due reminders as delivered and writes a notification record.
+4. Add retries, dead-letter handling, cancellation, and idempotent delivery. **Foundation done:** Asynq retries delivery jobs and cancelled or already delivered reminders are skipped safely.
+5. Record notification and delivery status. **Done:** delivery writes to `notifications` and updates reminder status.
 
 Exit: create, edit, cancel, and receive a reminder reliably across restarts.
 

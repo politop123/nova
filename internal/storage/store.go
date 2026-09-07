@@ -70,6 +70,54 @@ type MemoryUpdate struct {
 	ExpiresAt  *time.Time
 }
 
+type Task struct {
+	ID          string     `json:"id"`
+	UserID      string     `json:"userId"`
+	Title       string     `json:"title"`
+	Details     string     `json:"details,omitempty"`
+	Status      string     `json:"status"`
+	DueAt       *time.Time `json:"dueAt,omitempty"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+type TaskUpdate struct {
+	Title          *string
+	Details        *string
+	Status         *string
+	DueAt          *time.Time
+	DueAtSet       bool
+	CompletedAt    *time.Time
+	CompletedAtSet bool
+}
+
+type Reminder struct {
+	ID             string    `json:"id"`
+	UserID         string    `json:"userId"`
+	Title          string    `json:"title"`
+	TriggerAt      time.Time `json:"triggerAt"`
+	Timezone       string    `json:"timezone"`
+	RecurrenceRule string    `json:"recurrenceRule,omitempty"`
+	Priority       string    `json:"priority"`
+	DeliveryMethod string    `json:"deliveryMethod"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+type ReminderUpdate struct {
+	Title             *string
+	TriggerAt         *time.Time
+	TriggerAtSet      bool
+	Timezone          *string
+	RecurrenceRule    *string
+	RecurrenceRuleSet bool
+	Priority          *string
+	DeliveryMethod    *string
+	Status            *string
+}
+
 type UsageEvent struct {
 	UserID            string
 	Feature           string
@@ -344,6 +392,292 @@ func (s *Store) DeleteMemory(ctx context.Context, userID, memoryID string) error
 	return nil
 }
 
+func (s *Store) CreateTask(ctx context.Context, task Task, idempotencyKey string) (Task, error) {
+	if s == nil || s.db == nil {
+		return Task{}, errors.New("database is not configured")
+	}
+	var result Task
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO tasks (user_id, title, details, status, due_at, idempotency_key)
+		VALUES ($1::uuid, $2, NULLIF($3, ''), COALESCE(NULLIF($4, ''), 'open'), $5, NULLIF($6, ''))
+		ON CONFLICT (user_id, idempotency_key) DO UPDATE SET updated_at = tasks.updated_at
+		RETURNING id::text, user_id::text, title, COALESCE(details, ''), status, due_at, completed_at,
+			created_at, updated_at
+	`, task.UserID, task.Title, task.Details, task.Status, task.DueAt, idempotencyKey).Scan(
+		&result.ID, &result.UserID, &result.Title, &result.Details, &result.Status, &result.DueAt,
+		&result.CompletedAt, &result.CreatedAt, &result.UpdatedAt,
+	)
+	if err != nil {
+		return Task{}, fmt.Errorf("create task: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) ListTasks(ctx context.Context, userID, status string, limit int) ([]Task, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("database is not configured")
+	}
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, user_id::text, title, COALESCE(details, ''), status, due_at, completed_at,
+			created_at, updated_at
+		FROM tasks
+		WHERE user_id = $1::uuid AND (NULLIF($2, '') IS NULL OR status = $2)
+		ORDER BY
+			CASE status WHEN 'open' THEN 0 WHEN 'done' THEN 1 ELSE 2 END,
+			due_at ASC NULLS LAST,
+			updated_at DESC
+		LIMIT $3
+	`, userID, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	defer rows.Close()
+	result := make([]Task, 0)
+	for rows.Next() {
+		var task Task
+		if err := rows.Scan(
+			&task.ID, &task.UserID, &task.Title, &task.Details, &task.Status, &task.DueAt,
+			&task.CompletedAt, &task.CreatedAt, &task.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan task: %w", err)
+		}
+		result = append(result, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list tasks rows: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) UpdateTask(ctx context.Context, userID, taskID string, update TaskUpdate) (Task, error) {
+	if s == nil || s.db == nil {
+		return Task{}, errors.New("database is not configured")
+	}
+	var result Task
+	err := s.db.QueryRow(ctx, `
+		UPDATE tasks
+		SET title = COALESCE($3, title),
+			details = CASE WHEN $4 THEN NULLIF($5, '') ELSE details END,
+			status = COALESCE($6, status),
+			due_at = CASE WHEN $7 THEN $8 ELSE due_at END,
+			completed_at = CASE WHEN $9 THEN $10 ELSE completed_at END,
+			updated_at = now()
+		WHERE id = $1::uuid AND user_id = $2::uuid
+		RETURNING id::text, user_id::text, title, COALESCE(details, ''), status, due_at, completed_at,
+			created_at, updated_at
+	`, taskID, userID, update.Title, update.Details != nil, stringValue(update.Details), update.Status,
+		update.DueAtSet, update.DueAt, update.CompletedAtSet, update.CompletedAt).Scan(
+		&result.ID, &result.UserID, &result.Title, &result.Details, &result.Status, &result.DueAt,
+		&result.CompletedAt, &result.CreatedAt, &result.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrNotFound
+	}
+	if err != nil {
+		return Task{}, fmt.Errorf("update task: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) CancelTask(ctx context.Context, userID, taskID string) error {
+	now := time.Now().UTC()
+	status := "cancelled"
+	_, err := s.UpdateTask(ctx, userID, taskID, TaskUpdate{
+		Status: &status, CompletedAt: &now, CompletedAtSet: true,
+	})
+	return err
+}
+
+func (s *Store) CreateReminder(ctx context.Context, reminder Reminder, idempotencyKey string) (Reminder, error) {
+	if s == nil || s.db == nil {
+		return Reminder{}, errors.New("database is not configured")
+	}
+	var result Reminder
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO reminders (
+			user_id, title, trigger_at, timezone, recurrence_rule, priority, delivery_method, status, idempotency_key
+		)
+		VALUES (
+			$1::uuid, $2, $3, $4, NULLIF($5, ''), COALESCE(NULLIF($6, ''), 'normal'),
+			COALESCE(NULLIF($7, ''), 'web'), COALESCE(NULLIF($8, ''), 'scheduled'), NULLIF($9, '')
+		)
+		ON CONFLICT (user_id, idempotency_key) DO UPDATE SET updated_at = reminders.updated_at
+		RETURNING id::text, user_id::text, title, trigger_at, timezone, COALESCE(recurrence_rule, ''),
+			priority, delivery_method, status, created_at, updated_at
+	`, reminder.UserID, reminder.Title, reminder.TriggerAt, reminder.Timezone, reminder.RecurrenceRule,
+		reminder.Priority, reminder.DeliveryMethod, reminder.Status, idempotencyKey).Scan(
+		&result.ID, &result.UserID, &result.Title, &result.TriggerAt, &result.Timezone,
+		&result.RecurrenceRule, &result.Priority, &result.DeliveryMethod, &result.Status,
+		&result.CreatedAt, &result.UpdatedAt,
+	)
+	if err != nil {
+		return Reminder{}, fmt.Errorf("create reminder: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) ListReminders(ctx context.Context, userID, status string, limit int) ([]Reminder, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("database is not configured")
+	}
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, user_id::text, title, trigger_at, timezone, COALESCE(recurrence_rule, ''),
+			priority, delivery_method, status, created_at, updated_at
+		FROM reminders
+		WHERE user_id = $1::uuid AND (NULLIF($2, '') IS NULL OR status = $2)
+		ORDER BY
+			CASE status WHEN 'scheduled' THEN 0 WHEN 'delivered' THEN 1 ELSE 2 END,
+			trigger_at ASC,
+			updated_at DESC
+		LIMIT $3
+	`, userID, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list reminders: %w", err)
+	}
+	defer rows.Close()
+	result := make([]Reminder, 0)
+	for rows.Next() {
+		var reminder Reminder
+		if err := rows.Scan(
+			&reminder.ID, &reminder.UserID, &reminder.Title, &reminder.TriggerAt, &reminder.Timezone,
+			&reminder.RecurrenceRule, &reminder.Priority, &reminder.DeliveryMethod, &reminder.Status,
+			&reminder.CreatedAt, &reminder.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan reminder: %w", err)
+		}
+		result = append(result, reminder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list reminders rows: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) UpdateReminder(ctx context.Context, userID, reminderID string, update ReminderUpdate) (Reminder, error) {
+	if s == nil || s.db == nil {
+		return Reminder{}, errors.New("database is not configured")
+	}
+	var result Reminder
+	err := s.db.QueryRow(ctx, `
+		UPDATE reminders
+		SET title = COALESCE($3, title),
+			trigger_at = CASE WHEN $4 THEN $5 ELSE trigger_at END,
+			timezone = COALESCE($6, timezone),
+			recurrence_rule = CASE WHEN $7 THEN NULLIF($8, '') ELSE recurrence_rule END,
+			priority = COALESCE($9, priority),
+			delivery_method = COALESCE($10, delivery_method),
+			status = COALESCE($11, status),
+			updated_at = now()
+		WHERE id = $1::uuid AND user_id = $2::uuid
+		RETURNING id::text, user_id::text, title, trigger_at, timezone, COALESCE(recurrence_rule, ''),
+			priority, delivery_method, status, created_at, updated_at
+	`, reminderID, userID, update.Title, update.TriggerAtSet, update.TriggerAt, update.Timezone,
+		update.RecurrenceRuleSet, stringValue(update.RecurrenceRule), update.Priority, update.DeliveryMethod,
+		update.Status).Scan(
+		&result.ID, &result.UserID, &result.Title, &result.TriggerAt, &result.Timezone,
+		&result.RecurrenceRule, &result.Priority, &result.DeliveryMethod, &result.Status,
+		&result.CreatedAt, &result.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Reminder{}, ErrNotFound
+	}
+	if err != nil {
+		return Reminder{}, fmt.Errorf("update reminder: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) CancelReminder(ctx context.Context, userID, reminderID string) error {
+	status := "cancelled"
+	_, err := s.UpdateReminder(ctx, userID, reminderID, ReminderUpdate{Status: &status})
+	return err
+}
+
+func (s *Store) CreateScheduledJob(ctx context.Context, jobType, entityID string, runAt time.Time) error {
+	if s == nil || s.db == nil {
+		return errors.New("database is not configured")
+	}
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO scheduled_jobs (job_type, entity_id, run_at)
+		VALUES ($1, NULLIF($2, '')::uuid, $3)
+	`, jobType, entityID, runAt)
+	if err != nil {
+		return fmt.Errorf("create scheduled job: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeliverReminder(ctx context.Context, userID, reminderID string) (Reminder, bool, error) {
+	if s == nil || s.db == nil {
+		return Reminder{}, false, errors.New("database is not configured")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Reminder{}, false, fmt.Errorf("begin reminder delivery: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var reminder Reminder
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, user_id::text, title, trigger_at, timezone, COALESCE(recurrence_rule, ''),
+			priority, delivery_method, status, created_at, updated_at
+		FROM reminders
+		WHERE id = $1::uuid AND user_id = $2::uuid
+		FOR UPDATE
+	`, reminderID, userID).Scan(
+		&reminder.ID, &reminder.UserID, &reminder.Title, &reminder.TriggerAt, &reminder.Timezone,
+		&reminder.RecurrenceRule, &reminder.Priority, &reminder.DeliveryMethod, &reminder.Status,
+		&reminder.CreatedAt, &reminder.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Reminder{}, false, ErrNotFound
+	}
+	if err != nil {
+		return Reminder{}, false, fmt.Errorf("get reminder for delivery: %w", err)
+	}
+	if reminder.Status != "scheduled" || reminder.TriggerAt.After(time.Now().UTC().Add(30*time.Second)) {
+		if err := tx.Commit(ctx); err != nil {
+			return Reminder{}, false, fmt.Errorf("commit skipped reminder delivery: %w", err)
+		}
+		return reminder, false, nil
+	}
+
+	idempotencyKey := "reminder:" + reminder.ID + ":delivery"
+	_, err = tx.Exec(ctx, `
+		INSERT INTO notifications (user_id, channel, title, body, status, idempotency_key, sent_at)
+		VALUES ($1::uuid, $2, $3, $4, 'sent', $5, now())
+		ON CONFLICT (user_id, idempotency_key) DO UPDATE
+		SET status = 'sent', sent_at = COALESCE(notifications.sent_at, now())
+	`, reminder.UserID, reminder.DeliveryMethod, reminder.Title, reminder.Title, idempotencyKey)
+	if err != nil {
+		return Reminder{}, false, fmt.Errorf("record reminder notification: %w", err)
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE reminders
+		SET status = 'delivered', updated_at = now()
+		WHERE id = $1::uuid AND user_id = $2::uuid
+		RETURNING id::text, user_id::text, title, trigger_at, timezone, COALESCE(recurrence_rule, ''),
+			priority, delivery_method, status, created_at, updated_at
+	`, reminder.ID, reminder.UserID).Scan(
+		&reminder.ID, &reminder.UserID, &reminder.Title, &reminder.TriggerAt, &reminder.Timezone,
+		&reminder.RecurrenceRule, &reminder.Priority, &reminder.DeliveryMethod, &reminder.Status,
+		&reminder.CreatedAt, &reminder.UpdatedAt,
+	)
+	if err != nil {
+		return Reminder{}, false, fmt.Errorf("mark reminder delivered: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Reminder{}, false, fmt.Errorf("commit reminder delivery: %w", err)
+	}
+	return reminder, true, nil
+}
+
 func (s *Store) AddMessage(ctx context.Context, message Message) (Message, error) {
 	var result Message
 	err := s.db.QueryRow(ctx, `
@@ -451,4 +785,11 @@ func (s *Store) CostSince(ctx context.Context, userID string, since time.Time) (
 		return 0, fmt.Errorf("calculate usage cost: %w", err)
 	}
 	return total, nil
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

@@ -157,6 +157,9 @@ CREATE TABLE IF NOT EXISTS reminders (
   UNIQUE (user_id, idempotency_key)
 );
 
+CREATE INDEX IF NOT EXISTS tasks_user_status_due_idx ON tasks(user_id, status, due_at);
+CREATE INDEX IF NOT EXISTS reminders_user_status_trigger_idx ON reminders(user_id, status, trigger_at);
+
 CREATE TABLE IF NOT EXISTS scheduled_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   job_type TEXT NOT NULL,

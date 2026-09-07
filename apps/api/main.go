@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisclient "github.com/redis/go-redis/v9"
 	"nova.local/core/internal/agent"
@@ -42,6 +43,8 @@ func main() {
 	}
 	redisClient := redisclient.NewClient(&redisclient.Options{Addr: redisAddr})
 	defer redisClient.Close()
+	reminderQueue := asynq.NewClient(asynq.RedisClientOpt{Addr: redisAddr})
+	defer reminderQueue.Close()
 
 	store := storage.New(db)
 	if err := store.EnsureUser(ctx, cfg.NovaUserID); err != nil {
@@ -66,8 +69,9 @@ func main() {
 			Models: agent.ModelCatalog{
 				Simple: cfg.OpenAITextModel, Medium: cfg.OpenAIMediumModel, Strong: cfg.OpenAIStrongModel,
 			},
-			UserID: cfg.NovaUserID,
-			Logger: logger,
+			UserID:        cfg.NovaUserID,
+			Logger:        logger,
+			ReminderQueue: reminderQueue,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

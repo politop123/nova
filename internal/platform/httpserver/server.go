@@ -12,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"nova.local/core/internal/agent"
 	"nova.local/core/internal/core"
+	"nova.local/core/internal/jobs"
 	"nova.local/core/internal/memory"
 	"nova.local/core/internal/platform/config"
 	"nova.local/core/internal/storage"
@@ -31,23 +33,25 @@ type UsageResponder interface {
 }
 
 type Dependencies struct {
-	Store     *storage.Store
-	Responder Responder
-	Models    agent.ModelCatalog
-	UserID    string
-	Logger    *slog.Logger
+	Store         *storage.Store
+	Responder     Responder
+	Models        agent.ModelCatalog
+	UserID        string
+	Logger        *slog.Logger
+	ReminderQueue *asynq.Client
 }
 
 type Server struct {
-	cfg       config.Config
-	db        *pgxpool.Pool
-	redis     *redis.Client
-	store     *storage.Store
-	responder Responder
-	models    agent.ModelCatalog
-	userID    string
-	logger    *slog.Logger
-	mux       *http.ServeMux
+	cfg           config.Config
+	db            *pgxpool.Pool
+	redis         *redis.Client
+	store         *storage.Store
+	responder     Responder
+	models        agent.ModelCatalog
+	userID        string
+	logger        *slog.Logger
+	reminderQueue *asynq.Client
+	mux           *http.ServeMux
 }
 
 func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps Dependencies) *Server {
@@ -56,15 +60,16 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 		logger = slog.Default()
 	}
 	s := &Server{
-		cfg:       cfg,
-		db:        db,
-		redis:     redisClient,
-		store:     deps.Store,
-		responder: deps.Responder,
-		models:    deps.Models,
-		userID:    deps.UserID,
-		logger:    logger,
-		mux:       http.NewServeMux(),
+		cfg:           cfg,
+		db:            db,
+		redis:         redisClient,
+		store:         deps.Store,
+		responder:     deps.Responder,
+		models:        deps.Models,
+		userID:        deps.UserID,
+		logger:        logger,
+		reminderQueue: deps.ReminderQueue,
+		mux:           http.NewServeMux(),
 	}
 	if s.models.Simple == "" {
 		s.models = agent.DefaultModels()
@@ -80,6 +85,14 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 	s.mux.HandleFunc("POST /api/v1/memories", s.createMemory)
 	s.mux.HandleFunc("PATCH /api/v1/memories/{id}", s.updateMemory)
 	s.mux.HandleFunc("DELETE /api/v1/memories/{id}", s.deleteMemory)
+	s.mux.HandleFunc("GET /api/v1/tasks", s.listTasks)
+	s.mux.HandleFunc("POST /api/v1/tasks", s.createTask)
+	s.mux.HandleFunc("PATCH /api/v1/tasks/{id}", s.updateTask)
+	s.mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.cancelTask)
+	s.mux.HandleFunc("GET /api/v1/reminders", s.listReminders)
+	s.mux.HandleFunc("POST /api/v1/reminders", s.createReminder)
+	s.mux.HandleFunc("PATCH /api/v1/reminders/{id}", s.updateReminder)
+	s.mux.HandleFunc("DELETE /api/v1/reminders/{id}", s.cancelReminder)
 	return s
 }
 
@@ -121,6 +134,42 @@ type updateMemoryRequest struct {
 	Confidence *float64 `json:"confidence"`
 	ProjectKey *string  `json:"projectKey"`
 	ExpiresAt  *string  `json:"expiresAt"`
+}
+
+type createTaskRequest struct {
+	Title          string `json:"title"`
+	Details        string `json:"details"`
+	DueAt          string `json:"dueAt"`
+	Timezone       string `json:"timezone"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+type updateTaskRequest struct {
+	Title    *string `json:"title"`
+	Details  *string `json:"details"`
+	Status   *string `json:"status"`
+	DueAt    *string `json:"dueAt"`
+	Timezone *string `json:"timezone"`
+}
+
+type createReminderRequest struct {
+	Title          string `json:"title"`
+	TriggerAt      string `json:"triggerAt"`
+	Timezone       string `json:"timezone"`
+	RecurrenceRule string `json:"recurrenceRule"`
+	Priority       string `json:"priority"`
+	DeliveryMethod string `json:"deliveryMethod"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+type updateReminderRequest struct {
+	Title          *string `json:"title"`
+	TriggerAt      *string `json:"triggerAt"`
+	Timezone       *string `json:"timezone"`
+	RecurrenceRule *string `json:"recurrenceRule"`
+	Priority       *string `json:"priority"`
+	DeliveryMethod *string `json:"deliveryMethod"`
+	Status         *string `json:"status"`
 }
 
 type routeResponse struct {
@@ -288,6 +337,443 @@ func (s *Server) deleteMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	userID := s.requestUserID(r)
+	if err := s.store.EnsureUser(r.Context(), userID); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	tasks, err := s.store.ListTasks(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("status")),
+		parseLimit(r.URL.Query().Get("limit"), 50))
+	if err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	userID := s.requestUserID(r)
+	if err := s.store.EnsureUser(r.Context(), userID); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	var request createTaskRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	taskRecord, err := s.buildTaskRecord(userID, request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	created, err := s.store.CreateTask(r.Context(), taskRecord, strings.TrimSpace(request.IdempotencyKey))
+	if err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	var request updateTaskRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	update, err := s.buildTaskUpdate(request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if update.Title == nil && update.Details == nil && update.Status == nil && !update.DueAtSet {
+		writeError(w, http.StatusBadRequest, "at least one task field is required")
+		return
+	}
+	updated, err := s.store.UpdateTask(r.Context(), s.requestUserID(r), r.PathValue("id"), update)
+	if err != nil {
+		s.writeTaskError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	if err := s.store.CancelTask(r.Context(), s.requestUserID(r), r.PathValue("id")); err != nil {
+		s.writeTaskError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listReminders(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	userID := s.requestUserID(r)
+	if err := s.store.EnsureUser(r.Context(), userID); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	reminders, err := s.store.ListReminders(r.Context(), userID, strings.TrimSpace(r.URL.Query().Get("status")),
+		parseLimit(r.URL.Query().Get("limit"), 50))
+	if err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reminders": reminders})
+}
+
+func (s *Server) createReminder(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	userID := s.requestUserID(r)
+	if err := s.store.EnsureUser(r.Context(), userID); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	var request createReminderRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	reminderRecord, err := s.buildReminderRecord(userID, request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	created, err := s.store.CreateReminder(r.Context(), reminderRecord, strings.TrimSpace(request.IdempotencyKey))
+	if err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	if err := s.scheduleReminder(r.Context(), created); err != nil {
+		s.logger.Error("reminder scheduling failed", "reminder_id", created.ID, "error", err)
+		writeError(w, http.StatusServiceUnavailable, "reminder could not be scheduled")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) updateReminder(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	var request updateReminderRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		return
+	}
+	update, err := s.buildReminderUpdate(request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if update.Title == nil && !update.TriggerAtSet && update.Timezone == nil && !update.RecurrenceRuleSet &&
+		update.Priority == nil && update.DeliveryMethod == nil && update.Status == nil {
+		writeError(w, http.StatusBadRequest, "at least one reminder field is required")
+		return
+	}
+	updated, err := s.store.UpdateReminder(r.Context(), s.requestUserID(r), r.PathValue("id"), update)
+	if err != nil {
+		s.writeReminderError(w, err)
+		return
+	}
+	if updated.Status == "scheduled" {
+		if err := s.scheduleReminder(r.Context(), updated); err != nil {
+			s.logger.Error("reminder rescheduling failed", "reminder_id", updated.ID, "error", err)
+			writeError(w, http.StatusServiceUnavailable, "reminder could not be scheduled")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) cancelReminder(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	if err := s.store.CancelReminder(r.Context(), s.requestUserID(r), r.PathValue("id")); err != nil {
+		s.writeReminderError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) buildTaskRecord(userID string, request createTaskRequest) (storage.Task, error) {
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		return storage.Task{}, errors.New("title is required")
+	}
+	timezone := s.requestTimezone(request.Timezone)
+	dueAt, err := parseOptionalZonedTime(request.DueAt, timezone, "dueAt")
+	if err != nil {
+		return storage.Task{}, err
+	}
+	return storage.Task{
+		UserID:  userID,
+		Title:   title,
+		Details: strings.TrimSpace(request.Details),
+		Status:  "open",
+		DueAt:   dueAt,
+	}, nil
+}
+
+func (s *Server) buildTaskUpdate(request updateTaskRequest) (storage.TaskUpdate, error) {
+	var update storage.TaskUpdate
+	if request.Title != nil {
+		title := strings.TrimSpace(*request.Title)
+		if title == "" {
+			return storage.TaskUpdate{}, errors.New("title cannot be empty")
+		}
+		update.Title = &title
+	}
+	if request.Details != nil {
+		details := strings.TrimSpace(*request.Details)
+		update.Details = &details
+	}
+	if request.Status != nil {
+		status := strings.TrimSpace(*request.Status)
+		if !validTaskStatus(status) {
+			return storage.TaskUpdate{}, errors.New("status must be open, done, or cancelled")
+		}
+		update.Status = &status
+		if status == "done" || status == "cancelled" {
+			now := time.Now().UTC()
+			update.CompletedAt = &now
+			update.CompletedAtSet = true
+		}
+		if status == "open" {
+			update.CompletedAt = nil
+			update.CompletedAtSet = true
+		}
+	}
+	if request.DueAt != nil {
+		timezone := s.cfg.Timezone
+		if request.Timezone != nil {
+			timezone = *request.Timezone
+		}
+		dueAt, err := parseOptionalZonedTime(*request.DueAt, s.requestTimezone(timezone), "dueAt")
+		if err != nil {
+			return storage.TaskUpdate{}, err
+		}
+		update.DueAt = dueAt
+		update.DueAtSet = true
+	}
+	return update, nil
+}
+
+func (s *Server) buildReminderRecord(userID string, request createReminderRequest) (storage.Reminder, error) {
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		return storage.Reminder{}, errors.New("title is required")
+	}
+	timezone := s.requestTimezone(request.Timezone)
+	triggerAt, err := parseRequiredZonedTime(request.TriggerAt, timezone, "triggerAt")
+	if err != nil {
+		return storage.Reminder{}, err
+	}
+	priority := strings.TrimSpace(request.Priority)
+	if priority == "" {
+		priority = "normal"
+	}
+	if !validPriority(priority) {
+		return storage.Reminder{}, errors.New("priority must be low, normal, or high")
+	}
+	deliveryMethod := strings.TrimSpace(request.DeliveryMethod)
+	if deliveryMethod == "" {
+		deliveryMethod = "web"
+	}
+	if !validDeliveryMethod(deliveryMethod) {
+		return storage.Reminder{}, errors.New("deliveryMethod must be web or telegram")
+	}
+	return storage.Reminder{
+		UserID: userID, Title: title, TriggerAt: *triggerAt, Timezone: timezone,
+		RecurrenceRule: strings.TrimSpace(request.RecurrenceRule),
+		Priority:       priority, DeliveryMethod: deliveryMethod, Status: "scheduled",
+	}, nil
+}
+
+func (s *Server) buildReminderUpdate(request updateReminderRequest) (storage.ReminderUpdate, error) {
+	var update storage.ReminderUpdate
+	if request.Title != nil {
+		title := strings.TrimSpace(*request.Title)
+		if title == "" {
+			return storage.ReminderUpdate{}, errors.New("title cannot be empty")
+		}
+		update.Title = &title
+	}
+	if request.TriggerAt != nil {
+		timezone := s.cfg.Timezone
+		if request.Timezone != nil {
+			timezone = *request.Timezone
+		}
+		triggerAt, err := parseRequiredZonedTime(*request.TriggerAt, s.requestTimezone(timezone), "triggerAt")
+		if err != nil {
+			return storage.ReminderUpdate{}, err
+		}
+		update.TriggerAt = triggerAt
+		update.TriggerAtSet = true
+	}
+	if request.Timezone != nil {
+		timezone := s.requestTimezone(*request.Timezone)
+		update.Timezone = &timezone
+	}
+	if request.RecurrenceRule != nil {
+		recurrenceRule := strings.TrimSpace(*request.RecurrenceRule)
+		update.RecurrenceRule = &recurrenceRule
+		update.RecurrenceRuleSet = true
+	}
+	if request.Priority != nil {
+		priority := strings.TrimSpace(*request.Priority)
+		if !validPriority(priority) {
+			return storage.ReminderUpdate{}, errors.New("priority must be low, normal, or high")
+		}
+		update.Priority = &priority
+	}
+	if request.DeliveryMethod != nil {
+		deliveryMethod := strings.TrimSpace(*request.DeliveryMethod)
+		if !validDeliveryMethod(deliveryMethod) {
+			return storage.ReminderUpdate{}, errors.New("deliveryMethod must be web or telegram")
+		}
+		update.DeliveryMethod = &deliveryMethod
+	}
+	if request.Status != nil {
+		status := strings.TrimSpace(*request.Status)
+		if !validReminderStatus(status) {
+			return storage.ReminderUpdate{}, errors.New("status must be scheduled, delivered, or cancelled")
+		}
+		update.Status = &status
+	}
+	return update, nil
+}
+
+func (s *Server) scheduleReminder(ctx context.Context, reminder storage.Reminder) error {
+	if s.reminderQueue == nil {
+		return errors.New("reminder queue is not configured")
+	}
+	task, err := jobs.NewReminderDeliveryTask(reminder)
+	if err != nil {
+		return err
+	}
+	_, err = s.reminderQueue.EnqueueContext(ctx, task,
+		asynq.ProcessAt(reminder.TriggerAt),
+		asynq.TaskID(jobs.ReminderTaskID(reminder)),
+		asynq.MaxRetry(5),
+	)
+	if errors.Is(err, asynq.ErrDuplicateTask) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.store.CreateScheduledJob(ctx, jobs.TypeReminderDelivery, reminder.ID, reminder.TriggerAt)
+}
+
+func (s *Server) requestTimezone(value string) string {
+	timezone := strings.TrimSpace(value)
+	if timezone == "" {
+		timezone = strings.TrimSpace(s.cfg.Timezone)
+	}
+	if timezone == "" {
+		return "Europe/Kyiv"
+	}
+	return timezone
+}
+
+func parseRequiredZonedTime(value, timezone, field string) (*time.Time, error) {
+	parsed, err := parseOptionalZonedTime(value, timezone, field)
+	if err != nil {
+		return nil, err
+	}
+	if parsed == nil {
+		return nil, fmt.Errorf("%s is required", field)
+	}
+	return parsed, nil
+}
+
+func parseOptionalZonedTime(value, timezone, field string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		utc := parsed.UTC()
+		return &utc, nil
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, fmt.Errorf("timezone %q is invalid", timezone)
+	}
+	layouts := []string{
+		"2006-01-02T15:04",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if parsed, err := time.ParseInLocation(layout, value, location); err == nil {
+			utc := parsed.UTC()
+			return &utc, nil
+		}
+	}
+	return nil, fmt.Errorf("%s must be RFC3339 or a local datetime", field)
+}
+
+func validTaskStatus(value string) bool {
+	switch value {
+	case "open", "done", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func validReminderStatus(value string) bool {
+	switch value {
+	case "scheduled", "delivered", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func validPriority(value string) bool {
+	switch value {
+	case "low", "normal", "high":
+		return true
+	default:
+		return false
+	}
+}
+
+func validDeliveryMethod(value string) bool {
+	switch value {
+	case "web", "telegram":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildMemoryRecord(userID string, request createMemoryRequest) (storage.Memory, error) {
@@ -741,6 +1227,22 @@ func (s *Server) writeMemoryError(w http.ResponseWriter, err error) {
 	s.writeStorageError(w, err)
 }
 
+func (s *Server) writeTaskError(w http.ResponseWriter, err error) {
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	s.writeStorageError(w, err)
+}
+
+func (s *Server) writeReminderError(w http.ResponseWriter, err error) {
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "reminder not found")
+		return
+	}
+	s.writeStorageError(w, err)
+}
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	decoder := json.NewDecoder(r.Body)
@@ -765,7 +1267,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func deterministicResponse(intent string) string {
 	switch intent {
 	case "reminder.create":
-		return "Команду нагадування розпізнано. Планувальник нагадувань буде підключено наступним етапом."
+		return "Команду нагадування розпізнано. Створити точне нагадування вже можна у вкладці «Задачі»."
 	case "interaction.stop":
 		return "Поточну дію зупинено."
 	case "confirmation.approve":

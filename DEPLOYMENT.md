@@ -58,6 +58,17 @@ HEALTH_URL=http://127.0.0.1/health
 
 The workflow preserves the other values in this file. Keep all provider and database secrets only on the VM or in GitHub Actions secrets.
 
+To enable model responses, add the OpenAI API key only to the VM environment:
+
+```sh
+ssh opc@79.76.109.43
+cd /opt/nova
+sudoedit .env
+docker compose --env-file .env -f docker-compose.prod.yml up -d api worker
+```
+
+Set `OPENAI_API_KEY` in that file and keep the existing daily and monthly budget limits. Do not paste the key into source files, commits, logs, or browser-visible frontend configuration.
+
 ## Domain and Cloudflare
 
 The live public URL is `https://nova-app.i-shevchhuukk.workers.dev`. A small Cloudflare Worker terminates HTTPS and forwards requests to the Oracle VM. Its versioned source and Wrangler configuration are in `infrastructure/cloudflare/`.

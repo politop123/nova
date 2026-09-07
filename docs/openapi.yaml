@@ -215,6 +215,186 @@ paths:
           description: Memory soft-deleted.
         '404':
           description: Memory not found.
+  /api/v1/tasks:
+    get:
+      operationId: listTasks
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [open, done, cancelled] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: User tasks.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks]
+                properties:
+                  tasks:
+                    type: array
+                    items: { $ref: '#/components/schemas/Task' }
+    post:
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1 }
+                details: { type: string }
+                dueAt:
+                  description: RFC3339 timestamp or local datetime interpreted in timezone.
+                  type: string
+                timezone: { type: string, example: Europe/Kyiv }
+                idempotencyKey: { type: string }
+      responses:
+        '201':
+          description: Created task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '400':
+          description: Invalid task payload.
+  /api/v1/tasks/{taskId}:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                title: { type: string }
+                details: { type: string }
+                status: { type: string, enum: [open, done, cancelled] }
+                dueAt:
+                  description: RFC3339 timestamp or local datetime interpreted in timezone. Empty clears due date.
+                  type: string
+                timezone: { type: string, example: Europe/Kyiv }
+      responses:
+        '200':
+          description: Updated task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '404':
+          description: Task not found.
+    delete:
+      operationId: cancelTask
+      responses:
+        '204':
+          description: Task marked as cancelled.
+        '404':
+          description: Task not found.
+  /api/v1/reminders:
+    get:
+      operationId: listReminders
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [scheduled, delivered, cancelled] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: User reminders.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reminders]
+                properties:
+                  reminders:
+                    type: array
+                    items: { $ref: '#/components/schemas/Reminder' }
+    post:
+      operationId: createReminder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, triggerAt]
+              properties:
+                title: { type: string, minLength: 1 }
+                triggerAt:
+                  description: RFC3339 timestamp or local datetime interpreted in timezone.
+                  type: string
+                timezone: { type: string, example: Europe/Kyiv }
+                recurrenceRule: { type: string }
+                priority: { type: string, enum: [low, normal, high], default: normal }
+                deliveryMethod: { type: string, enum: [web, telegram], default: web }
+                idempotencyKey: { type: string }
+      responses:
+        '201':
+          description: Created and scheduled reminder.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reminder' }
+        '400':
+          description: Invalid reminder payload.
+        '503':
+          description: Reminder queue is unavailable.
+  /api/v1/reminders/{reminderId}:
+    parameters:
+      - name: reminderId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateReminder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                title: { type: string }
+                triggerAt:
+                  description: RFC3339 timestamp or local datetime interpreted in timezone.
+                  type: string
+                timezone: { type: string, example: Europe/Kyiv }
+                recurrenceRule: { type: string }
+                priority: { type: string, enum: [low, normal, high] }
+                deliveryMethod: { type: string, enum: [web, telegram] }
+                status: { type: string, enum: [scheduled, delivered, cancelled] }
+      responses:
+        '200':
+          description: Updated and rescheduled reminder when still scheduled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reminder' }
+        '404':
+          description: Reminder not found.
+    delete:
+      operationId: cancelReminder
+      responses:
+        '204':
+          description: Reminder marked as cancelled.
+        '404':
+          description: Reminder not found.
 components:
   schemas:
     HealthResponse:
@@ -315,5 +495,45 @@ components:
         sourceMessageId: { type: string, format: uuid }
         projectKey: { type: string }
         expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Task:
+      type: object
+      required: [id, userId, title, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        title: { type: string }
+        details: { type: string }
+        status: { type: string, enum: [open, done, cancelled] }
+        dueAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Reminder:
+      type: object
+      required:
+        [
+          id,
+          userId,
+          title,
+          triggerAt,
+          timezone,
+          priority,
+          deliveryMethod,
+          status,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        title: { type: string }
+        triggerAt: { type: string, format: date-time }
+        timezone: { type: string, example: Europe/Kyiv }
+        recurrenceRule: { type: string }
+        priority: { type: string, enum: [low, normal, high] }
+        deliveryMethod: { type: string, enum: [web, telegram] }
+        status: { type: string, enum: [scheduled, delivered, cancelled] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
