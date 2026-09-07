@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -26,6 +27,7 @@ type Config struct {
 	TelegramEnabled       bool
 	TelegramBotToken      string
 	TelegramAllowedUserID string
+	TelegramAllowedChatID string
 	TelegramWebhookSecret string
 }
 
@@ -61,6 +63,7 @@ func Load() (Config, error) {
 		TelegramEnabled:       telegram,
 		TelegramBotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramAllowedUserID: os.Getenv("TELEGRAM_ALLOWED_USER_ID"),
+		TelegramAllowedChatID: os.Getenv("TELEGRAM_ALLOWED_CHAT_ID"),
 		TelegramWebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
 	}, nil
 }
@@ -74,6 +77,20 @@ func (c Config) RedisAddress() (string, error) {
 		return "", fmt.Errorf("redis URL has no host")
 	}
 	return u.Host, nil
+}
+
+func (c Config) TelegramNotificationChatID() (int64, bool) {
+	for _, candidate := range []string{c.TelegramAllowedChatID, c.TelegramAllowedUserID} {
+		value := strings.TrimSpace(candidate)
+		if value == "" {
+			continue
+		}
+		chatID, err := strconv.ParseInt(value, 10, 64)
+		if err == nil {
+			return chatID, true
+		}
+	}
+	return 0, false
 }
 
 func stringEnv(name, fallback string) string {

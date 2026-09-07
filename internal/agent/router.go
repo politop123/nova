@@ -46,11 +46,18 @@ func DetectDeterministicIntent(text string) string {
 		return "confirmation.approve"
 	case normalized == "ні" || normalized == "скасувати" || normalized == "не роби" || normalized == "no":
 		return "confirmation.reject"
-	case strings.HasPrefix(normalized, "нагадай"), strings.HasPrefix(normalized, "нагадати"):
+	case hasReminderRequest(normalized):
 		return "reminder.create"
 	default:
 		return ""
 	}
+}
+
+func hasReminderRequest(normalized string) bool {
+	if strings.HasPrefix(normalized, "нагадай") || strings.HasPrefix(normalized, "нагадати") {
+		return true
+	}
+	return strings.Contains(normalized, " нагадай") || strings.Contains(normalized, " нагадати")
 }
 
 func RouteRequest(request Request, models ModelCatalog) Route {

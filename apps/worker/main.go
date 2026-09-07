@@ -7,6 +7,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/jobs"
 	"nova.local/core/internal/platform/config"
 	"nova.local/core/internal/storage"
@@ -37,12 +38,29 @@ func main() {
 	}
 	store := storage.New(db)
 
+	var telegramClient *telegram.Client
+	telegramChatID, hasTelegramChatID := cfg.TelegramNotificationChatID()
+	if cfg.TelegramEnabled && cfg.TelegramBotToken != "" {
+		telegramClient, err = telegram.NewClient(cfg.TelegramBotToken)
+		if err != nil {
+			logger.Warn("Telegram reminder delivery is disabled", "error", err)
+		}
+	} else if cfg.TelegramEnabled {
+		logger.Warn("TELEGRAM_ENABLED is true but TELEGRAM_BOT_TOKEN is not configured")
+	}
+	if cfg.TelegramEnabled && !hasTelegramChatID {
+		logger.Warn("Telegram reminder delivery has no configured chat id")
+	}
+
 	server := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: redisAddr},
 		asynq.Config{Concurrency: 4, Logger: slogAsynqLogger{logger: logger}},
 	)
 	logger.Info("NOVA worker is starting", "redis", redisAddr)
-	if err := server.Run(jobs.Handler(logger, store)); err != nil {
+	if err := server.Run(jobs.Handler(logger, store, jobs.HandlerConfig{
+		Telegram:       telegramClient,
+		TelegramChatID: telegramChatID,
+	})); err != nil {
 		logger.Error("worker stopped", "error", err)
 		os.Exit(1)
 	}

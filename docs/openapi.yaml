@@ -494,6 +494,8 @@ components:
             model: { type: string }
         usage:
           $ref: '#/components/schemas/NovaUsage'
+        createdReminder:
+          $ref: '#/components/schemas/Reminder'
     NovaUsage:
       type: object
       required: [feature, model, inputTokens, outputTokens, estimatedCostUsd]

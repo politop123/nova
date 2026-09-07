@@ -59,7 +59,7 @@ Exit: no CONFIRM action runs without a short-lived explicit approval tied to the
 
 1. Add task and reminder APIs with timezone-aware parsing. **Done:** Go endpoints accept RFC3339 or local datetimes interpreted in the user's timezone.
 2. Schedule deterministic BullMQ jobs. **Adjusted for Go:** reminders are scheduled through Asynq/Redis.
-3. Deliver reminders without an LLM call when stored text is sufficient. **Done:** the worker marks due reminders as delivered and writes a notification record.
+3. Deliver reminders without an LLM call when stored text is sufficient. **Done:** the worker marks due reminders as delivered, writes a notification record, and can send Telegram reminder messages when configured.
 4. Add retries, dead-letter handling, cancellation, and idempotent delivery. **Foundation done:** Asynq retries delivery jobs and cancelled or already delivered reminders are skipped safely.
 5. Record notification and delivery status. **Done:** delivery writes to `notifications` and updates reminder status.
 
@@ -67,10 +67,10 @@ Exit: create, edit, cancel, and receive a reminder reliably across restarts.
 
 ### Phase 6 Telegram
 
-1. Verify the configured Telegram user allowlist. **Foundation done:** the webhook checks `TELEGRAM_ALLOWED_USER_ID` when configured.
+1. Verify the configured Telegram allowlist. **Foundation done:** the webhook checks `TELEGRAM_ALLOWED_USER_ID` and/or `TELEGRAM_ALLOWED_CHAT_ID` when configured.
 2. Normalize incoming text and voice-message transcripts into `NovaInput`. **Foundation done:** text updates route directly; voice updates are downloaded and transcribed server-side before routing.
 3. Route Telegram and Web through the same conversation service. **Foundation done:** Telegram uses the same stored conversation, routing, compact context, model budget, usage accounting, and message persistence path as Web.
-4. Deliver proactive reminders and confirmation buttons. **Next:** proactive Telegram reminder delivery is configured after a bot token and user allowlist are added.
+4. Deliver proactive reminders and confirmation buttons. **Partial:** proactive Telegram reminder delivery is wired for scheduled reminders; confirmation buttons are next.
 5. Reject replayed callbacks and untrusted users.
 
 Exit: the same conversation continues between Web and Telegram, and proactive reminders arrive in Telegram.

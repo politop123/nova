@@ -9,6 +9,11 @@ func TestRouteRequest(t *testing.T) {
 		t.Fatalf("unexpected deterministic route: %+v", got)
 	}
 
+	got = RouteRequest(Request{Text: "Ти можеш мені нагадати через 2 хвилини, щоб я перевірив NOVA?"}, models)
+	if got.Mode != "deterministic" || got.Intent != "reminder.create" {
+		t.Fatalf("unexpected polite reminder route: %+v", got)
+	}
+
 	got = RouteRequest(Request{Text: "Що ми вирішили по NOVA?"}, models)
 	if got.Mode != "model" || got.Tier != TierSimple || got.Model != "gpt-5.6-luna" {
 		t.Fatalf("unexpected default route: %+v", got)

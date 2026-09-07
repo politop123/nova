@@ -56,6 +56,7 @@ WEB_ORIGIN=http://SERVER_IP
 TELEGRAM_ENABLED=false
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_USER_ID=
+TELEGRAM_ALLOWED_CHAT_ID=
 TELEGRAM_WEBHOOK_SECRET=
 DOMAIN=:80
 HEALTH_URL=http://127.0.0.1/health
@@ -84,6 +85,7 @@ After creating a bot in BotFather, set these values in `/opt/nova/.env`:
 TELEGRAM_ENABLED=true
 TELEGRAM_BOT_TOKEN=replace-with-bot-token
 TELEGRAM_ALLOWED_USER_ID=replace-with-your-numeric-telegram-user-id
+TELEGRAM_ALLOWED_CHAT_ID=replace-with-your-private-chat-id
 TELEGRAM_WEBHOOK_SECRET=replace-with-a-long-random-secret
 ```
 
@@ -97,7 +99,7 @@ curl -fsS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
   -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
 ```
 
-The webhook accepts Telegram text and voice messages. Voice input is downloaded server-side, transcribed with `OPENAI_TRANSCRIBE_MODEL`, normalized into the same NOVA conversation path as Web, and answered back through the bot. Keep the allowlist enabled before exposing the webhook.
+The webhook accepts Telegram text and voice messages. Voice input is downloaded server-side, transcribed with `OPENAI_TRANSCRIBE_MODEL`, normalized into the same NOVA conversation path as Web, and answered back through the bot. Scheduled reminders with `deliveryMethod=telegram` are delivered by the worker to `TELEGRAM_ALLOWED_CHAT_ID` or, when it is empty, `TELEGRAM_ALLOWED_USER_ID`. Keep the allowlist enabled before exposing the webhook.
 
 ## Domain and Cloudflare
 

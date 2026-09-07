@@ -559,6 +559,30 @@ func (s *Store) ListReminders(ctx context.Context, userID, status string, limit 
 	return result, nil
 }
 
+func (s *Store) GetReminder(ctx context.Context, userID, reminderID string) (Reminder, error) {
+	if s == nil || s.db == nil {
+		return Reminder{}, errors.New("database is not configured")
+	}
+	var reminder Reminder
+	err := s.db.QueryRow(ctx, `
+		SELECT id::text, user_id::text, title, trigger_at, timezone, COALESCE(recurrence_rule, ''),
+			priority, delivery_method, status, created_at, updated_at
+		FROM reminders
+		WHERE id = $1::uuid AND user_id = $2::uuid
+	`, reminderID, userID).Scan(
+		&reminder.ID, &reminder.UserID, &reminder.Title, &reminder.TriggerAt, &reminder.Timezone,
+		&reminder.RecurrenceRule, &reminder.Priority, &reminder.DeliveryMethod, &reminder.Status,
+		&reminder.CreatedAt, &reminder.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Reminder{}, ErrNotFound
+	}
+	if err != nil {
+		return Reminder{}, fmt.Errorf("get reminder: %w", err)
+	}
+	return reminder, nil
+}
+
 func (s *Store) UpdateReminder(ctx context.Context, userID, reminderID string, update ReminderUpdate) (Reminder, error) {
 	if s == nil || s.db == nil {
 		return Reminder{}, errors.New("database is not configured")

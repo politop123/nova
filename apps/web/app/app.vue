@@ -252,6 +252,11 @@ function consumeSSEFrame(frame: string) {
   } else if (event === 'done' && payload.assistantMessage) {
     messages.value.push(payload.assistantMessage);
     streamingText.value = '';
+    if (payload.createdReminder) {
+      void loadReminders().catch((error: any) => {
+        errorMessage.value = normalizeError(error, 'Нагадування створено, але список не оновився.');
+      });
+    }
   } else if (event === 'error') {
     throw new Error(payload.message ?? 'Потік відповіді завершився з помилкою.');
   }

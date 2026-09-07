@@ -203,6 +203,7 @@ type createMessageResponse struct {
 	Assistant    storage.Message      `json:"assistantMessage"`
 	Route        routeResponse        `json:"route"`
 	Usage        *core.NovaUsage      `json:"usage,omitempty"`
+	Reminder     *storage.Reminder    `json:"createdReminder,omitempty"`
 }
 
 func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {
@@ -564,8 +565,8 @@ func (s *Server) telegramWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	message := *update.Message
-	if !s.telegramUserAllowed(message.From) {
-		s.logger.Warn("telegram update rejected by allowlist", "telegram_user_id", telegramUserID(message.From))
+	if !s.telegramMessageAllowed(message) {
+		s.logger.Warn("telegram update rejected by allowlist", "telegram_user_id", telegramUserID(message.From), "telegram_chat_id", message.Chat.ID)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -611,15 +612,19 @@ func (s *Server) telegramSecretValid(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
 }
 
-func (s *Server) telegramUserAllowed(user *telegram.User) bool {
-	allowed := strings.TrimSpace(s.cfg.TelegramAllowedUserID)
-	if allowed == "" {
+func (s *Server) telegramMessageAllowed(message telegram.Message) bool {
+	allowedUserID := strings.TrimSpace(s.cfg.TelegramAllowedUserID)
+	allowedChatID := strings.TrimSpace(s.cfg.TelegramAllowedChatID)
+	if allowedUserID == "" && allowedChatID == "" {
 		return true
 	}
-	if user == nil {
-		return false
+	if allowedUserID != "" && message.From != nil && strconv.FormatInt(message.From.ID, 10) == allowedUserID {
+		return true
 	}
-	return strconv.FormatInt(user.ID, 10) == allowed
+	if allowedChatID != "" && strconv.FormatInt(message.Chat.ID, 10) == allowedChatID {
+		return true
+	}
+	return false
 }
 
 func telegramUserID(user *telegram.User) string {
@@ -1103,8 +1108,16 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 
 	route := agent.RouteRequest(agent.Request{Text: text}, s.models)
 	assistantText := deterministicResponse(route.Intent)
+	var createdReminder *storage.Reminder
 	var modelUsage *core.NovaUsage
 	modelStartedAt := time.Now()
+	if route.Intent == "reminder.create" {
+		var actionErr *serviceError
+		assistantText, createdReminder, actionErr = s.createReminderFromChatCommand(ctx, userID, channel, text, traceID)
+		if actionErr != nil {
+			return createMessageResponse{}, actionErr
+		}
+	}
 	if route.Mode == "model" {
 		if s.responder == nil {
 			return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured", nil)
@@ -1189,7 +1202,8 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 			Mode: stringOrEmpty(route.Mode), Intent: stringOrEmpty(route.Intent),
 			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
 		},
-		Usage: modelUsage,
+		Usage:    modelUsage,
+		Reminder: createdReminder,
 	}, nil
 }
 
@@ -1269,10 +1283,20 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	route := agent.RouteRequest(agent.Request{Text: request.Text}, s.models)
+	var createdReminder *storage.Reminder
+	deterministicAssistantText := deterministicResponse(route.Intent)
 	var messages []storage.Message
 	var modelInput string
 	var estimatedUsage core.NovaUsage
 	modelStartedAt := time.Now()
+	if route.Intent == "reminder.create" {
+		var actionErr *serviceError
+		deterministicAssistantText, createdReminder, actionErr = s.createReminderFromChatCommand(r.Context(), userID, "web", request.Text, traceID)
+		if actionErr != nil {
+			s.writeServiceError(w, actionErr)
+			return
+		}
+	}
 	if route.Mode == "model" {
 		if s.responder == nil {
 			writeError(w, http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured")
@@ -1313,7 +1337,7 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	assistantText := deterministicResponse(route.Intent)
+	assistantText := deterministicAssistantText
 	var modelUsage *core.NovaUsage
 	if route.Mode == "model" {
 		if streamResponder, ok := s.responder.(StreamResponder); ok {
@@ -1393,7 +1417,8 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 			Mode: stringOrEmpty(route.Mode), Intent: stringOrEmpty(route.Intent),
 			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
 		},
-		Usage: modelUsage,
+		Usage:    modelUsage,
+		Reminder: createdReminder,
 	})
 }
 
