@@ -8,7 +8,7 @@ This document describes the production deployment for the Go API, Go worker, Nux
 
 The production files are `infrastructure/docker/docker-compose.prod.yml`, `infrastructure/caddy/Caddyfile`, and the scripts in `infrastructure/ops/`.
 
-The local repository currently has no GitHub remote. The first deployment therefore requires the target GitHub repository URL and Oracle VM connection details.
+The repository is hosted at `politop123/nova`, and pushes to `dev` trigger the deployment pipeline.
 
 ## GitHub Actions secrets
 
@@ -21,24 +21,22 @@ Required repository or environment secrets:
 Optional:
 
 - `ORACLE_PORT` — SSH port, default `22`.
-- `GHCR_USERNAME` and `GHCR_READ_TOKEN` — only if the GHCR packages are private and the VM needs an explicit read login.
+- `GHCR_USERNAME` and `GHCR_READ_TOKEN` — optional long-lived package credentials. When they are absent, the deployment job uses its short-lived GitHub token for images belonging to this repository.
 
 Do not commit `.env`, private keys, tokens, or database passwords. The workflow updates only `GHCR_OWNER` and `IMAGE_TAG` in the VM's existing `/opt/nova/.env`.
 
 ## Oracle VM preparation
 
-Run these commands on the existing VM. They do not create paid Oracle resources:
+For the Oracle Linux image used by the Always Free VM, copy and run the idempotent bootstrap script:
 
 ```sh
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker "$USER"
-mkdir -p /opt/nova/backups
-sudo chown -R "$USER":"$USER" /opt/nova
+scp infrastructure/ops/bootstrap-oracle-linux.sh opc@SERVER_IP:/tmp/
+ssh opc@SERVER_IP 'chmod 700 /tmp/bootstrap-oracle-linux.sh && /tmp/bootstrap-oracle-linux.sh opc'
 ```
 
-Allow inbound TCP `22`, `80`, and `443` in the Oracle security list and VM firewall. Do not publish PostgreSQL `5432` or Redis `6379`. Keep password SSH enabled until key login has been tested successfully.
+Reconnect over SSH after the script finishes so the `docker` group membership takes effect.
+
+Allow inbound TCP `22` and `80` in the Oracle security list and VM firewall. Add `443` only when Caddy terminates TLS directly. Do not publish PostgreSQL `5432` or Redis `6379`.
 
 Create `/opt/nova/.env` with mode `600`:
 
@@ -109,6 +107,10 @@ curl -fsS http://127.0.0.1/health
 
 When troubleshooting, inspect Compose status and logs, VM disk/RAM, GHCR authentication, firewall rules, and Caddy logs. Never remove the PostgreSQL volume as a first response.
 
-## Current blocker for first live deploy
+## First live deploy checklist
 
-The code and deployment automation are prepared locally. The first end-to-end deployment is waiting only for the GitHub repository URL and Oracle VM host, SSH user, and private-key path. A stable Cloudflare hostname additionally needs an existing domain or Cloudflare Tunnel credentials.
+1. Confirm the VM public subnet has a route for `0.0.0.0/0` through an internet gateway.
+2. Run `bootstrap-oracle-linux.sh` and reconnect over SSH.
+3. Create `/opt/nova/.env` with the required values above.
+4. Push to `dev` or run the `deploy-dev` workflow manually.
+5. Verify `http://SERVER_IP/health` before placing Cloudflare in front of the origin.

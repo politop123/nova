@@ -55,7 +55,7 @@ services:
     profiles: ['migration']
     <<: *image-pull-policy
     environment: *backend-environment
-    command: ['/nova', '-schema', '/schema/init.sql']
+    command: ['-schema', '/schema/init.sql']
     depends_on:
       postgres:
         condition: service_healthy
