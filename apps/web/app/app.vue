@@ -134,6 +134,51 @@ const scheduledReminders = computed(
   () => reminders.value.filter((reminder) => reminder.status === 'scheduled').length,
 );
 const memoryCount = computed(() => memories.value.length);
+const telegramMessageCount = computed(
+  () => messages.value.filter((message) => message.channel === 'telegram').length,
+);
+const upcomingReminder = computed(() => {
+  return [...reminders.value]
+    .filter((reminder) => reminder.status === 'scheduled')
+    .sort((left, right) => {
+      return new Date(left.triggerAt).getTime() - new Date(right.triggerAt).getTime();
+    })[0];
+});
+const metricCards = computed(() => [
+  {
+    label: 'Повідомлення',
+    value: messages.value.length,
+    detail: telegramMessageCount.value
+      ? `${telegramMessageCount.value} з Telegram`
+      : 'Web + Telegram',
+    icon: '✦',
+  },
+  {
+    label: 'Памʼять',
+    value: memoryCount.value,
+    detail: 'факти й вподобання',
+    icon: '◇',
+  },
+  {
+    label: 'Задачі',
+    value: activeTasks.value,
+    detail: 'активні зараз',
+    icon: '✓',
+  },
+  {
+    label: 'Нагадування',
+    value: scheduledReminders.value,
+    detail: upcomingReminder.value
+      ? `найближче ${formatDate(upcomingReminder.value.triggerAt)}`
+      : 'немає черги',
+    icon: '◴',
+  },
+]);
+const quickPrompts = [
+  'Нагадай через 10 хвилин перевірити NOVA',
+  'Запамʼятай, що Telegram — мій основний канал',
+  'Які задачі зараз відкриті?',
+];
 
 onMounted(async () => {
   timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Kyiv';
@@ -525,66 +570,113 @@ function messageAuthorLabel(message: NovaMessage) {
   }
   return message.role;
 }
+
+function usePrompt(prompt: string) {
+  activeView.value = 'chat';
+  input.value = prompt;
+}
+
+function deliveryMethodLabel(method: ReminderRecord['deliveryMethod']) {
+  return method === 'telegram' ? 'Telegram' : 'Web';
+}
+
+function memoryKindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    preference: 'Вподобання',
+    fact: 'Факт',
+    project: 'Проєкт',
+    constraint: 'Обмеження',
+  };
+  return labels[kind] ?? kind;
+}
 </script>
 
 <template>
   <main class="app-shell">
     <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark">N</span>
-        <div>
-          <p>NOVA</p>
-          <span>Персональна операційна система</span>
+      <div class="topbar-left">
+        <div class="brand">
+          <span class="brand-mark">N</span>
+          <div>
+            <p>NOVA</p>
+            <span>персональна ОС</span>
+          </div>
         </div>
+
+        <nav class="tabs" aria-label="Розділи NOVA">
+          <button
+            v-for="tab in tabs"
+            :key="tab.key"
+            type="button"
+            :class="{ active: activeView === tab.key }"
+            @click="activeView = tab.key"
+          >
+            {{ tab.label }}
+          </button>
+        </nav>
       </div>
 
       <div class="topbar-actions">
         <span class="status-pill" :data-state="apiState">
           <span class="status-dot" />
-          Core {{ statusLabels[apiState] }}
+          Core: {{ statusLabels[apiState] }}
         </span>
         <button class="ghost-button" type="button" @click="bootstrapApp">Оновити</button>
       </div>
     </header>
 
-    <nav class="tabs" aria-label="Розділи NOVA">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        type="button"
-        :class="{ active: activeView === tab.key }"
-        @click="activeView = tab.key"
-      >
-        {{ tab.label }}
-      </button>
-    </nav>
+    <section class="command-deck" aria-label="Поточний контекст NOVA">
+      <div class="command-copy">
+        <p class="eyebrow">NOVA Core</p>
+        <h1>Операційний центр</h1>
+        <p>
+          Web — допоміжна панель для памʼяті, задач і діагностики. Основне спілкування лишається в
+          Telegram.
+        </p>
+      </div>
+
+      <div class="command-status-card">
+        <span>Найближче нагадування</span>
+        <strong>{{
+          upcomingReminder ? formatDate(upcomingReminder.triggerAt) : 'Немає в черзі'
+        }}</strong>
+        <p>
+          {{
+            upcomingReminder
+              ? deliveryMethodLabel(upcomingReminder.deliveryMethod)
+              : 'Канал оберемо під задачу'
+          }}
+        </p>
+      </div>
+
+      <div class="command-status-card">
+        <span>Оновлено</span>
+        <strong>{{ lastSync || 'ще немає' }}</strong>
+        <p>{{ timezone }}</p>
+      </div>
+    </section>
 
     <section class="metrics" aria-label="Поточний стан">
-      <div>
-        <span>{{ messages.length }}</span>
-        <p>повідомлень</p>
-      </div>
-      <div>
-        <span>{{ memoryCount }}</span>
-        <p>записів памʼяті</p>
-      </div>
-      <div>
-        <span>{{ activeTasks }}</span>
-        <p>активних задач</p>
-      </div>
-      <div>
-        <span>{{ scheduledReminders }}</span>
-        <p>нагадувань</p>
-      </div>
+      <article v-for="card in metricCards" :key="card.label" class="metric-card">
+        <div>
+          <span class="metric-icon">{{ card.icon }}</span>
+          <p>{{ card.label }}</p>
+        </div>
+        <strong>{{ card.value }}</strong>
+        <small>{{ card.detail }}</small>
+      </article>
     </section>
 
     <p v-if="errorMessage" class="error-note">{{ errorMessage }}</p>
 
     <section v-if="activeView === 'chat'" class="workspace chat-view">
       <section class="work-panel chat-panel" aria-label="Чат з NOVA">
-        <div class="panel-title">
-          <p>Чат</p>
-          <h1>{{ conversation?.title || 'Нова розмова' }}</h1>
+        <div class="panel-title panel-title-row">
+          <div>
+            <p>Жива розмова</p>
+            <h1>{{ conversation?.title || 'Нова розмова' }}</h1>
+          </div>
+          <span class="panel-chip">{{ messages.length }} повідомлень</span>
         </div>
 
         <div class="messages" aria-live="polite">
@@ -601,7 +693,10 @@ function messageAuthorLabel(message: NovaMessage) {
             <span>NOVA</span>
             <p>{{ streamingText }}</p>
           </article>
-          <div v-if="!messages.length" class="empty-state">Розмова ще порожня.</div>
+          <div v-if="!messages.length" class="empty-state">
+            <strong>Розмова ще порожня</strong>
+            <span>Почни тут або напиши боту в Telegram — історія буде спільною.</span>
+          </div>
         </div>
 
         <div class="composer" aria-label="Нове повідомлення">
@@ -619,13 +714,22 @@ function messageAuthorLabel(message: NovaMessage) {
       </section>
 
       <aside class="side-rail" aria-label="Стан робочої області">
-        <div>
-          <p class="rail-label">Таймзона</p>
-          <strong>{{ timezone }}</strong>
+        <div class="rail-card">
+          <p class="rail-label">Канали</p>
+          <strong>Telegram + Web</strong>
+          <span>Єдине ядро, одна памʼять, одна історія.</span>
         </div>
-        <div>
-          <p class="rail-label">Останнє оновлення</p>
-          <strong>{{ lastSync || 'ще немає' }}</strong>
+        <div class="rail-card">
+          <p class="rail-label">Швидкий старт</p>
+          <button
+            v-for="prompt in quickPrompts"
+            :key="prompt"
+            class="prompt-chip"
+            type="button"
+            @click="usePrompt(prompt)"
+          >
+            {{ prompt }}
+          </button>
         </div>
       </aside>
     </section>
@@ -633,7 +737,7 @@ function messageAuthorLabel(message: NovaMessage) {
     <section v-else-if="activeView === 'memory'" class="workspace two-column">
       <form class="work-panel editor-panel" aria-label="Форма памʼяті" @submit.prevent="saveMemory">
         <div class="panel-title">
-          <p>Памʼять</p>
+          <p>Памʼять NOVA</p>
           <h1>{{ editingMemoryId ? 'Редагування' : 'Новий запис' }}</h1>
         </div>
 
@@ -695,7 +799,7 @@ function messageAuthorLabel(message: NovaMessage) {
         <div class="toolbar">
           <div class="panel-title">
             <p>Активна памʼять</p>
-            <h1>{{ memories.length }}</h1>
+            <h1>{{ memories.length }} записів</h1>
           </div>
           <div class="search-box">
             <input
@@ -711,7 +815,7 @@ function messageAuthorLabel(message: NovaMessage) {
         <div class="record-list">
           <article v-for="memory in memories" :key="memory.id" class="record">
             <div>
-              <span class="tag">{{ memory.kind }}</span>
+              <span class="tag">{{ memoryKindLabel(memory.kind) }}</span>
               <p>{{ memory.content }}</p>
               <small>
                 {{ Math.round(memory.confidence * 100) }}% · оновлено
@@ -735,7 +839,7 @@ function messageAuthorLabel(message: NovaMessage) {
     <section v-else class="workspace two-column tasks-grid">
       <section class="work-panel editor-panel" aria-label="Задачі">
         <div class="panel-title">
-          <p>Задача</p>
+          <p>Задачі</p>
           <h1>{{ editingTaskId ? 'Редагування' : 'Нова задача' }}</h1>
         </div>
 
@@ -853,7 +957,8 @@ function messageAuthorLabel(message: NovaMessage) {
               <span class="tag">{{ reminderLabels[reminder.status] }}</span>
               <p>{{ reminder.title }}</p>
               <small>
-                {{ formatDate(reminder.triggerAt) }} · {{ priorityLabels[reminder.priority] }}
+                {{ formatDate(reminder.triggerAt) }} · {{ priorityLabels[reminder.priority] }} ·
+                {{ deliveryMethodLabel(reminder.deliveryMethod) }}
               </small>
             </div>
             <div class="record-actions">
