@@ -130,6 +130,7 @@ jobs:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
       ORACLE_PORT: ${{ secrets.ORACLE_PORT || '22' }}
+      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
       GHCR_OWNER: ${{ needs.verify-and-publish.outputs.owner }}
       IMAGE_TAG: ${{ github.sha }}
     steps:
@@ -161,11 +162,10 @@ jobs:
             "set -eu; touch /opt/nova/.env; chmod 600 /opt/nova/.env; grep -q '^GHCR_OWNER=' /opt/nova/.env && sed -i 's/^GHCR_OWNER=.*/GHCR_OWNER=$GHCR_OWNER/' /opt/nova/.env || echo 'GHCR_OWNER=$GHCR_OWNER' >> /opt/nova/.env; grep -q '^IMAGE_TAG=' /opt/nova/.env && sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/' /opt/nova/.env || echo 'IMAGE_TAG=$IMAGE_TAG' >> /opt/nova/.env"
 
       - name: Authenticate Oracle to GHCR when a read token is configured
-        if: ${{ secrets.GHCR_READ_TOKEN != '' }}
+        if: ${{ env.GHCR_READ_TOKEN != '' }}
         shell: bash
         env:
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.repository_owner }}
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           printf '%s' "$GHCR_READ_TOKEN" | ssh -p "$ORACLE_PORT" "$ORACLE_USER@$ORACLE_HOST" \
             "docker login ghcr.io --username '$GHCR_USERNAME' --password-stdin"
