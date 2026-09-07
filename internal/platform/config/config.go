@@ -25,6 +25,11 @@ type Config struct {
 	Timezone              string
 	DailyBudgetUSD        float64
 	MonthlyBudgetUSD      float64
+	GitRepository         string
+	GitBranch             string
+	GitHubToken           string
+	GitHubAPIBase         string
+	GitDeployedCommitSHA  string
 	TelegramEnabled       bool
 	TelegramBotToken      string
 	TelegramAllowedUserID string
@@ -62,6 +67,11 @@ func Load() (Config, error) {
 		Timezone:              stringEnv("NOVA_TIMEZONE", "Europe/Kyiv"),
 		DailyBudgetUSD:        daily,
 		MonthlyBudgetUSD:      monthly,
+		GitRepository:         stringEnv("NOVA_GIT_REPOSITORY", "politop123/nova"),
+		GitBranch:             stringEnv("NOVA_GIT_BRANCH", "dev"),
+		GitHubToken:           stringEnv("NOVA_GITHUB_TOKEN", os.Getenv("GITHUB_TOKEN")),
+		GitHubAPIBase:         stringEnv("NOVA_GITHUB_API_BASE", "https://api.github.com"),
+		GitDeployedCommitSHA:  stringEnv("NOVA_DEPLOYED_COMMIT_SHA", os.Getenv("IMAGE_TAG")),
 		TelegramEnabled:       telegram,
 		TelegramBotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramAllowedUserID: os.Getenv("TELEGRAM_ALLOWED_USER_ID"),

@@ -55,6 +55,51 @@ interface ReminderRecord {
   updatedAt: string;
 }
 
+interface GitStatus {
+  repository: string;
+  branch: string;
+  latestCommit: GitCommit;
+  deployedCommit: GitCommitRef;
+  latestDeployRun?: GitWorkflowRun;
+  deployment: GitDeploymentState;
+  actionsError?: string;
+  checkedAt: string;
+}
+
+interface GitCommit {
+  sha: string;
+  shortSha: string;
+  message: string;
+  title: string;
+  authorName?: string;
+  committedAt?: string;
+  url?: string;
+}
+
+interface GitCommitRef {
+  sha?: string;
+  shortSha?: string;
+}
+
+interface GitWorkflowRun {
+  id: number;
+  name: string;
+  path?: string;
+  status: string;
+  conclusion?: string;
+  headSha: string;
+  shortHeadSha: string;
+  url?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+interface GitDeploymentState {
+  state: 'unknown' | 'current' | 'deploying' | 'published' | 'failed' | 'behind' | string;
+  isLatest: boolean;
+  summary: string;
+}
+
 const apiState = ref<ApiState>('checking');
 const activeView = ref<ViewName>('chat');
 const timezone = ref('Europe/Kyiv');
@@ -99,6 +144,10 @@ const reminderForm = reactive({
   deliveryMethod: 'web' as ReminderRecord['deliveryMethod'],
 });
 
+const gitStatus = ref<GitStatus | null>(null);
+const gitStatusLoading = ref(false);
+const gitStatusError = ref('');
+
 const tabs: Array<{ key: ViewName; label: string }> = [
   { key: 'chat', label: 'Чат' },
   { key: 'memory', label: 'Памʼять' },
@@ -127,6 +176,15 @@ const priorityLabels: Record<ReminderRecord['priority'], string> = {
   low: 'Низький',
   normal: 'Звичайний',
   high: 'Високий',
+};
+
+const gitDeploymentLabels: Record<string, string> = {
+  unknown: 'SHA невідомий',
+  current: 'Прод актуальний',
+  deploying: 'Деплой у процесі',
+  published: 'Workflow успішний',
+  failed: 'Деплой впав',
+  behind: 'Прод відстає',
 };
 
 const activeTasks = computed(() => tasks.value.filter((task) => task.status === 'open').length);
@@ -174,10 +232,31 @@ const metricCards = computed(() => [
     icon: '◴',
   },
 ]);
+const gitStatusTitle = computed(() => {
+  if (gitStatusLoading.value) return 'Перевіряю GitHub';
+  if (gitStatusError.value) return 'Git недоступний';
+  if (!gitStatus.value) return 'Git ще без даних';
+  return gitStatus.value.deployment.isLatest
+    ? `актуальний · ${gitStatus.value.latestCommit.shortSha}`
+    : `${gitStatus.value.latestCommit.shortSha} очікує`;
+});
+const gitStatusDetail = computed(() => {
+  if (gitStatusError.value) return gitStatusError.value;
+  if (!gitStatus.value) return 'NOVA зчитує repo/status із Core API';
+  const deployed = gitStatus.value.deployedCommit.shortSha
+    ? `prod ${gitStatus.value.deployedCommit.shortSha}`
+    : 'prod SHA невідомий';
+  const workflow = gitStatus.value.latestDeployRun
+    ? `workflow ${workflowStatusLabel(gitStatus.value.latestDeployRun)}`
+    : 'workflow без даних';
+  return `${gitDeploymentLabels[gitStatus.value.deployment.state] ?? gitStatus.value.deployment.state} · ${deployed} · ${workflow}`;
+});
 const quickPrompts = [
   'Нагадай через 10 хвилин перевірити NOVA',
   'Запамʼятай, що Telegram — мій основний канал',
   'Які задачі зараз відкриті?',
+  'Який останній commit у NOVA?',
+  'Чи задеплоївся останній commit?',
 ];
 
 onMounted(async () => {
@@ -196,7 +275,13 @@ async function bootstrapApp() {
     apiState.value = 'online';
     const result = await apiFetch<{ conversations: Conversation[] }>('/api/v1/conversations');
     conversation.value = result.conversations[0] ?? (await createConversation());
-    await Promise.all([loadMessages(), loadMemories(), loadTasks(), loadReminders()]);
+    await Promise.all([
+      loadMessages(),
+      loadMemories(),
+      loadTasks(),
+      loadReminders(),
+      loadGitStatus(),
+    ]);
     startMessagePolling();
     markSynced();
   } catch (error: any) {
@@ -283,6 +368,19 @@ async function loadReminders() {
   markSynced();
 }
 
+async function loadGitStatus() {
+  gitStatusLoading.value = true;
+  try {
+    gitStatus.value = await apiFetch<GitStatus>('/api/v1/devops/git/status');
+    gitStatusError.value = '';
+  } catch (error: any) {
+    gitStatus.value = null;
+    gitStatusError.value = normalizeError(error, 'Git статус тимчасово недоступний.');
+  } finally {
+    gitStatusLoading.value = false;
+  }
+}
+
 async function sendMessage() {
   const text = input.value.trim();
   if (!text || sending.value || !conversation.value) return;
@@ -361,6 +459,9 @@ function consumeSSEFrame(frame: string) {
       void loadReminders().catch((error: any) => {
         errorMessage.value = normalizeError(error, 'Нагадування створено, але список не оновився.');
       });
+    }
+    if (payload.route?.intent === 'git.status') {
+      void loadGitStatus();
     }
   } else if (event === 'error') {
     throw new Error(payload.message ?? 'Потік відповіді завершився з помилкою.');
@@ -580,6 +681,18 @@ function deliveryMethodLabel(method: ReminderRecord['deliveryMethod']) {
   return method === 'telegram' ? 'Telegram' : 'Web';
 }
 
+function workflowStatusLabel(run: GitWorkflowRun) {
+  if (run.status === 'completed') {
+    if (run.conclusion === 'success') return 'успішний';
+    if (run.conclusion === 'failure') return 'впав';
+    if (run.conclusion === 'cancelled') return 'скасований';
+    return run.conclusion || 'завершений';
+  }
+  if (run.status === 'in_progress') return 'в процесі';
+  if (run.status === 'queued') return 'у черзі';
+  return run.status || 'невідомий';
+}
+
 function memoryKindLabel(kind: string) {
   const labels: Record<string, string> = {
     preference: 'Вподобання',
@@ -647,6 +760,12 @@ function memoryKindLabel(kind: string) {
               : 'Канал оберемо під задачу'
           }}
         </p>
+      </div>
+
+      <div class="command-status-card">
+        <span>Git / Deploy</span>
+        <strong>{{ gitStatusTitle }}</strong>
+        <p>{{ gitStatusDetail }}</p>
       </div>
 
       <div class="command-status-card">

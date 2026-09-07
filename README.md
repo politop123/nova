@@ -47,6 +47,8 @@ starting the infrastructure.
 
 `OPENAI_API_KEY` is optional for the scaffold. The health endpoint and infrastructure can run without it. Never place secrets in the web application or commit `.env`.
 
+Git/deploy awareness is configured with `NOVA_GIT_REPOSITORY`, `NOVA_GIT_BRANCH`, optional server-side `NOVA_GITHUB_TOKEN`, and `IMAGE_TAG`/`NOVA_DEPLOYED_COMMIT_SHA`. The API exposes `/api/v1/devops/git/status`, and NOVA can answer chat questions such as “Який останній commit?” or “Чи задеплоївся вже цей commit?”.
+
 The schema runner is safe to repeat; Docker also applies the same initial
 schema automatically when it creates a new PostgreSQL volume.
 
@@ -64,4 +66,4 @@ pnpm format:check
 
 ## Current state
 
-This repository is the implementation foundation for v0.1. It includes Go core contracts, a working API health endpoint, an Asynq worker bootstrap, a Nuxt PWA shell, local infrastructure, and the initial database schema. The current slice includes persisted conversations, a model-backed structured action planner with deterministic fallback, SSE text streaming, bounded conversation summaries, managed memories with provenance and soft-delete, tasks, scheduled reminders, Telegram webhook/voice handling, model usage accounting, action audit records, and daily/monthly budget guards. Product features are intentionally delivered as vertical slices in the order documented in the implementation plan.
+This repository is the implementation foundation for v0.1. It includes Go core contracts, a working API health endpoint, an Asynq worker bootstrap, a Nuxt PWA shell, local infrastructure, and the initial database schema. The current slice includes persisted conversations, a model-backed structured action planner with deterministic fallback, SSE text streaming, bounded conversation summaries, managed memories with provenance and soft-delete, tasks, scheduled reminders, Telegram webhook/voice handling, Git/deploy status awareness, model usage accounting, action audit records, and daily/monthly budget guards. Product features are intentionally delivered as vertical slices in the order documented in the implementation plan.

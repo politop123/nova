@@ -6,6 +6,7 @@ const (
 	IntentMemorySave     = "memory.save"
 	IntentTaskCreate     = "task.create"
 	IntentReminderCreate = "reminder.create"
+	IntentGitStatus      = "git.status"
 )
 
 const (

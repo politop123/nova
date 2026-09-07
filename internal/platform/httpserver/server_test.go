@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nova.local/core/internal/core"
+	"nova.local/core/internal/integrations/githubstatus"
 	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/platform/config"
 )
@@ -256,5 +257,52 @@ func TestDefaultReminderDeliveryMethodFallsBackToWebWithoutTelegramToken(t *test
 	}}
 	if got := server.defaultReminderDeliveryMethod(core.ChannelWeb); got != "web" {
 		t.Fatalf("delivery method = %q, want web", got)
+	}
+}
+
+func TestExtractCommitReference(t *testing.T) {
+	got := extractCommitReference("Чи задеплоївся commit ABCDEF123?")
+	if got != "abcdef123" {
+		t.Fatalf("extractCommitReference() = %q, want abcdef123", got)
+	}
+}
+
+func TestFormatGitStatusAssistantTextForLatestCommit(t *testing.T) {
+	status := githubstatus.Status{
+		Branch:       "dev",
+		LatestCommit: githubstatus.Commit{SHA: "abcdef1234567890", ShortSHA: "abcdef1", Title: "feat: devops awareness"},
+		DeployedCommit: githubstatus.CommitRef{
+			SHA:      "abcdef1234567890",
+			ShortSHA: "abcdef1",
+		},
+		Deployment: githubstatus.Deployment{State: "current", IsLatest: true, Summary: "Production уже працює на останньому commit."},
+		LatestDeployRun: &githubstatus.WorkflowRun{
+			ID:           42,
+			Name:         "Deploy to Oracle VM",
+			Status:       "completed",
+			Conclusion:   "success",
+			HeadSHA:      "abcdef1234567890",
+			ShortHeadSHA: "abcdef1",
+		},
+	}
+
+	got := formatGitStatusAssistantText(status, "Який останній коміт?")
+	if !strings.Contains(got, "abcdef1") || !strings.Contains(got, "уже задеплоєний") || !strings.Contains(got, "успішно завершився") {
+		t.Fatalf("unexpected assistant text: %q", got)
+	}
+}
+
+func TestFormatGitStatusAssistantTextForSpecificCommit(t *testing.T) {
+	status := githubstatus.Status{
+		Branch:          "dev",
+		LatestCommit:    githubstatus.Commit{SHA: "abcdef1234567890", ShortSHA: "abcdef1", Title: "feat: devops awareness"},
+		DeployedCommit:  githubstatus.CommitRef{SHA: "1234567890abcdef", ShortSHA: "1234567"},
+		Deployment:      githubstatus.Deployment{State: "behind", IsLatest: false, Summary: "Production відстає від останнього commit у Git."},
+		LatestDeployRun: nil,
+	}
+
+	got := formatGitStatusAssistantText(status, "Чи задеплоївся abcdef1?")
+	if !strings.Contains(got, "останній у `dev`") || !strings.Contains(got, "production зараз показує `1234567`") {
+		t.Fatalf("unexpected assistant text: %q", got)
 	}
 }

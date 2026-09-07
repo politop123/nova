@@ -46,7 +46,11 @@ func (s *Server) planAndMaybeExecuteActions(
 	traceID string,
 	userMessage storage.Message,
 ) (plannedActionResult, *serviceError) {
-	if action, ok := deterministicPersonalFactMemoryAction(text); ok && agent.DetectDeterministicIntent(text) == "" {
+	deterministicIntent := agent.DetectDeterministicIntent(text)
+	if deterministicIntent == core.IntentGitStatus {
+		return plannedActionResult{}, nil
+	}
+	if action, ok := deterministicPersonalFactMemoryAction(text); ok && deterministicIntent == "" {
 		plan := core.ActionPlan{
 			Intent:     core.IntentMemorySave,
 			Confidence: 1,
@@ -128,6 +132,14 @@ func (s *Server) planAndMaybeExecuteActions(
 	}
 
 	plan := normalizeServerActionPlan(result.Plan)
+	if plan.Intent == core.IntentGitStatus {
+		return plannedActionResult{
+			Handled:       true,
+			Intent:        core.IntentGitStatus,
+			AssistantText: s.gitStatusAssistantText(ctx, text),
+			Usage:         &plannerUsage,
+		}, nil
+	}
 	if !planNeedsHandling(plan) {
 		return plannedActionResult{Usage: &plannerUsage}, nil
 	}
@@ -249,7 +261,7 @@ func planNeedsHandling(plan core.ActionPlan) bool {
 		return true
 	}
 	switch plan.Intent {
-	case core.IntentMemorySave, core.IntentTaskCreate, core.IntentReminderCreate, core.IntentUnknown:
+	case core.IntentMemorySave, core.IntentTaskCreate, core.IntentReminderCreate, core.IntentGitStatus, core.IntentUnknown:
 		return true
 	default:
 		return false

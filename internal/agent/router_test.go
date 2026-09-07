@@ -14,6 +14,21 @@ func TestRouteRequest(t *testing.T) {
 		t.Fatalf("unexpected polite reminder route: %+v", got)
 	}
 
+	got = RouteRequest(Request{Text: "Який останній коміт у NOVA?"}, models)
+	if got.Mode != "deterministic" || got.Intent != "git.status" {
+		t.Fatalf("unexpected git route: %+v", got)
+	}
+
+	got = RouteRequest(Request{Text: "Чи задеплоївся вже commit 9905719?"}, models)
+	if got.Mode != "deterministic" || got.Intent != "git.status" {
+		t.Fatalf("unexpected deploy route: %+v", got)
+	}
+
+	got = RouteRequest(Request{Text: "Що там з продуктом NOVA?"}, models)
+	if got.Mode == "deterministic" && got.Intent == "git.status" {
+		t.Fatalf("product question should not be treated as prod deploy: %+v", got)
+	}
+
 	got = RouteRequest(Request{Text: "Що ми вирішили по NOVA?"}, models)
 	if got.Mode != "model" || got.Tier != TierSimple || got.Model != "gpt-5.6-luna" {
 		t.Fatalf("unexpected default route: %+v", got)

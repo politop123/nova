@@ -18,6 +18,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"nova.local/core/internal/agent"
 	"nova.local/core/internal/core"
+	"nova.local/core/internal/integrations/githubstatus"
 	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/jobs"
 	"nova.local/core/internal/memory"
@@ -47,6 +48,10 @@ type TelegramClient interface {
 	DownloadVoice(ctx context.Context, fileID string) (telegram.VoiceDownload, error)
 }
 
+type GitStatusProvider interface {
+	Status(ctx context.Context, deployedSHA string) (githubstatus.Status, error)
+}
+
 type Dependencies struct {
 	Store         *storage.Store
 	Responder     Responder
@@ -57,6 +62,7 @@ type Dependencies struct {
 	Telegram      TelegramClient
 	Transcriber   AudioTranscriber
 	Planner       ActionPlanner
+	GitStatus     GitStatusProvider
 }
 
 type Server struct {
@@ -72,6 +78,7 @@ type Server struct {
 	telegram      TelegramClient
 	transcriber   AudioTranscriber
 	planner       ActionPlanner
+	gitStatus     GitStatusProvider
 	mux           *http.ServeMux
 }
 
@@ -93,6 +100,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 		telegram:      deps.Telegram,
 		transcriber:   deps.Transcriber,
 		planner:       deps.Planner,
+		gitStatus:     deps.GitStatus,
 		mux:           http.NewServeMux(),
 	}
 	if s.models.Simple == "" {
@@ -117,6 +125,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 	s.mux.HandleFunc("POST /api/v1/reminders", s.createReminder)
 	s.mux.HandleFunc("PATCH /api/v1/reminders/{id}", s.updateReminder)
 	s.mux.HandleFunc("DELETE /api/v1/reminders/{id}", s.cancelReminder)
+	s.mux.HandleFunc("GET /api/v1/devops/git/status", s.getGitStatus)
 	s.mux.HandleFunc("POST /api/v1/telegram/webhook", s.telegramWebhook)
 	return s
 }
@@ -1141,7 +1150,10 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 		}
 		assistantText = deterministicResponse(route.Intent)
 		modelStartedAt := time.Now()
-		if route.Intent == "reminder.create" {
+		if route.Intent == core.IntentGitStatus {
+			assistantText = s.gitStatusAssistantText(ctx, text)
+		}
+		if route.Intent == core.IntentReminderCreate {
 			var actionErr *serviceError
 			assistantText, createdReminder, actionErr = s.createReminderFromChatCommand(ctx, userID, channel, text, traceID)
 			if actionErr != nil {
@@ -1344,7 +1356,10 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
 		}
 		assistantText = deterministicResponse(route.Intent)
-		if route.Intent == "reminder.create" {
+		if route.Intent == core.IntentGitStatus {
+			assistantText = s.gitStatusAssistantText(r.Context(), request.Text)
+		}
+		if route.Intent == core.IntentReminderCreate {
 			var actionErr *serviceError
 			assistantText, createdReminder, actionErr = s.createReminderFromChatCommand(r.Context(), userID, "web", request.Text, traceID)
 			if actionErr != nil {
@@ -1577,6 +1592,8 @@ func deterministicResponse(intent string) string {
 	switch intent {
 	case "reminder.create":
 		return "Команду нагадування розпізнано. Створити точне нагадування вже можна у вкладці «Задачі»."
+	case core.IntentGitStatus:
+		return "Перевіряю GitHub і production-версію NOVA."
 	case "interaction.stop":
 		return "Поточну дію зупинено."
 	case "confirmation.approve":

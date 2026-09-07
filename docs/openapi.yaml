@@ -395,6 +395,21 @@ paths:
           description: Reminder marked as cancelled.
         '404':
           description: Reminder not found.
+  /api/v1/devops/git/status:
+    get:
+      operationId: getGitStatus
+      description: Reads NOVA repository, latest branch commit, deployment workflow, and the commit SHA currently exposed by production.
+      responses:
+        '200':
+          description: Current Git and deployment status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitStatus'
+        '502':
+          description: GitHub status could not be read.
+        '503':
+          description: GitHub status integration is not configured.
   /api/v1/telegram/webhook:
     post:
       operationId: receiveTelegramWebhook
@@ -564,6 +579,59 @@ components:
         status: { type: string, enum: [scheduled, delivered, cancelled] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    GitStatus:
+      type: object
+      required: [repository, branch, latestCommit, deployedCommit, deployment, checkedAt]
+      properties:
+        repository: { type: string, example: politop123/nova }
+        branch: { type: string, example: dev }
+        latestCommit:
+          $ref: '#/components/schemas/GitCommit'
+        deployedCommit:
+          $ref: '#/components/schemas/GitCommitRef'
+        latestDeployRun:
+          $ref: '#/components/schemas/GitWorkflowRun'
+        deployment:
+          $ref: '#/components/schemas/GitDeploymentState'
+        actionsError: { type: string }
+        checkedAt: { type: string, format: date-time }
+    GitCommit:
+      type: object
+      required: [sha, shortSha, message, title]
+      properties:
+        sha: { type: string }
+        shortSha: { type: string, example: 9905719 }
+        message: { type: string }
+        title: { type: string }
+        authorName: { type: string }
+        committedAt: { type: string, format: date-time }
+        url: { type: string, format: uri }
+    GitCommitRef:
+      type: object
+      properties:
+        sha: { type: string }
+        shortSha: { type: string, example: 9905719 }
+    GitWorkflowRun:
+      type: object
+      required: [id, name, status, headSha, shortHeadSha]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        path: { type: string }
+        status: { type: string, example: completed }
+        conclusion: { type: string, example: success }
+        headSha: { type: string }
+        shortHeadSha: { type: string, example: 9905719 }
+        url: { type: string, format: uri }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    GitDeploymentState:
+      type: object
+      required: [state, isLatest, summary]
+      properties:
+        state: { type: string, enum: [unknown, current, deploying, published, failed, behind] }
+        isLatest: { type: boolean }
+        summary: { type: string }
     TelegramUpdate:
       type: object
       properties:

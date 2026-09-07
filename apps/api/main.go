@@ -15,6 +15,7 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 	"nova.local/core/internal/agent"
 	"nova.local/core/internal/ai/openaiadapter"
+	"nova.local/core/internal/integrations/githubstatus"
 	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/platform/config"
 	"nova.local/core/internal/platform/httpserver"
@@ -72,6 +73,19 @@ func main() {
 		logger.Warn("TELEGRAM_ENABLED is true but TELEGRAM_BOT_TOKEN is not configured")
 	}
 
+	var gitStatusClient *githubstatus.Client
+	if cfg.GitRepository != "" {
+		gitStatusClient, err = githubstatus.New(
+			cfg.GitRepository,
+			cfg.GitBranch,
+			cfg.GitHubToken,
+			githubstatus.WithBaseURL(cfg.GitHubAPIBase),
+		)
+		if err != nil {
+			logger.Warn("GitHub status adapter is disabled", "error", err)
+		}
+	}
+
 	server := &http.Server{
 		Addr: ":" + cfg.APIPort,
 		Handler: httpserver.New(cfg, db, redisClient, httpserver.Dependencies{
@@ -86,6 +100,7 @@ func main() {
 			Telegram:      telegramClient,
 			Transcriber:   responder,
 			Planner:       responder,
+			GitStatus:     gitStatusClient,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

@@ -46,6 +46,8 @@ func DetectDeterministicIntent(text string) string {
 		return "confirmation.approve"
 	case normalized == "ні" || normalized == "скасувати" || normalized == "не роби" || normalized == "no":
 		return "confirmation.reject"
+	case hasGitStatusRequest(normalized):
+		return "git.status"
 	case hasReminderRequest(normalized):
 		return "reminder.create"
 	default:
@@ -58,6 +60,45 @@ func hasReminderRequest(normalized string) bool {
 		return true
 	}
 	return strings.Contains(normalized, " нагадай") || strings.Contains(normalized, " нагадати")
+}
+
+func hasGitStatusRequest(normalized string) bool {
+	hasOperationalTarget := containsAny(normalized, []string{
+		"git", "github", "гіт", "ґіт", "репозитор", "repo",
+		"коміт", "комит", "commit",
+		"деплой", "депло", "задепло", "deploy", "deployment",
+		"workflow", "actions", "production",
+	}) || hasProdToken(normalized)
+	if !hasOperationalTarget {
+		return false
+	}
+	return containsAny(normalized, []string{
+		"остан", "який", "яка", "що там", "статус", "стан",
+		"задепло", "депло", "deploy", "workflow", "actions",
+	}) || hasProdToken(normalized)
+}
+
+func containsAny(value string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasProdToken(normalized string) bool {
+	fields := strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
+			r == ',' || r == '.' || r == '?' || r == '!' || r == ':' || r == ';' ||
+			r == '(' || r == ')' || r == '[' || r == ']'
+	})
+	for _, field := range fields {
+		if field == "прод" || field == "prod" || strings.HasPrefix(field, "продакш") {
+			return true
+		}
+	}
+	return false
 }
 
 func RouteRequest(request Request, models ModelCatalog) Route {
