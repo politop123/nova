@@ -395,6 +395,27 @@ paths:
           description: Reminder marked as cancelled.
         '404':
           description: Reminder not found.
+  /api/v1/telegram/webhook:
+    post:
+      operationId: receiveTelegramWebhook
+      description: Receives Telegram Bot API updates, normalizes text or voice messages, and routes them through the shared NOVA Core conversation path.
+      parameters:
+        - name: X-Telegram-Bot-Api-Secret-Token
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TelegramUpdate' }
+      responses:
+        '204':
+          description: Update accepted or safely ignored.
+        '401':
+          description: Webhook secret does not match.
+        '503':
+          description: Telegram integration is not configured.
 components:
   schemas:
     HealthResponse:
@@ -537,3 +558,32 @@ components:
         status: { type: string, enum: [scheduled, delivered, cancelled] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    TelegramUpdate:
+      type: object
+      properties:
+        update_id: { type: integer }
+        message:
+          type: object
+          properties:
+            message_id: { type: integer }
+            from:
+              type: object
+              properties:
+                id: { type: integer }
+                is_bot: { type: boolean }
+                first_name: { type: string }
+                username: { type: string }
+            chat:
+              type: object
+              properties:
+                id: { type: integer }
+                type: { type: string }
+            text: { type: string }
+            voice:
+              type: object
+              properties:
+                file_id: { type: string }
+                file_unique_id: { type: string }
+                duration: { type: integer }
+                mime_type: { type: string }
+                file_size: { type: integer }

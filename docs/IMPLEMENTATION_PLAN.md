@@ -67,10 +67,10 @@ Exit: create, edit, cancel, and receive a reminder reliably across restarts.
 
 ### Phase 6 Telegram
 
-1. Verify the configured Telegram user allowlist.
-2. Normalize incoming text and voice-message transcripts into `NovaInput`.
-3. Route Telegram and Web through the same conversation service.
-4. Deliver proactive reminders and confirmation buttons.
+1. Verify the configured Telegram user allowlist. **Foundation done:** the webhook checks `TELEGRAM_ALLOWED_USER_ID` when configured.
+2. Normalize incoming text and voice-message transcripts into `NovaInput`. **Foundation done:** text updates route directly; voice updates are downloaded and transcribed server-side before routing.
+3. Route Telegram and Web through the same conversation service. **Foundation done:** Telegram uses the same stored conversation, routing, compact context, model budget, usage accounting, and message persistence path as Web.
+4. Deliver proactive reminders and confirmation buttons. **Next:** proactive Telegram reminder delivery is configured after a bot token and user allowlist are added.
 5. Reject replayed callbacks and untrusted users.
 
 Exit: the same conversation continues between Web and Telegram, and proactive reminders arrive in Telegram.

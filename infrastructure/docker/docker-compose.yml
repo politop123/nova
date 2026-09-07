@@ -42,6 +42,11 @@ services:
       DATABASE_URL: postgresql://nova:nova_local_only@postgres:5432/nova
       REDIS_URL: redis://redis:6379
       NOVA_TIMEZONE: Europe/Kyiv
+      OPENAI_TRANSCRIBE_MODEL: gpt-4o-mini-transcribe
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USER_ID: ${TELEGRAM_ALLOWED_USER_ID:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     ports:
       - '${API_PORT:-4000}:4000'
     depends_on:
@@ -61,6 +66,11 @@ services:
       DATABASE_URL: postgresql://nova:nova_local_only@postgres:5432/nova
       REDIS_URL: redis://redis:6379
       NOVA_TIMEZONE: Europe/Kyiv
+      OPENAI_TRANSCRIBE_MODEL: gpt-4o-mini-transcribe
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USER_ID: ${TELEGRAM_ALLOWED_USER_ID:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

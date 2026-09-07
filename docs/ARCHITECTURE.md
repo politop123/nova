@@ -17,7 +17,9 @@ channel -> normalized input -> deterministic route -> compact context
 - PostgreSQL: source of truth for identity, conversations, memory, tasks, reminders, policy state, audit, integrations, and usage.
 - pgvector: semantic retrieval over approved memories.
 - Redis and Asynq: disposable job transport; PostgreSQL remains the durable source of truth.
-- Web: PWA channel and management dashboard.
+- Telegram: primary daily conversation and notification channel. Text and voice inputs are normalized into the same NOVA Core path as Web; voice messages are downloaded server-side and transcribed before routing.
+- Web: auxiliary PWA channel and management dashboard for memory, tasks, reminders, and debugging.
+- Phone: escalation channel for critical or missed notifications in later releases; calls must remain idempotent, auditable, budgeted, and policy-gated.
 
 ## Conversation context and cost safety
 

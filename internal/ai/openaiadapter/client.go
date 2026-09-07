@@ -1,6 +1,7 @@
 package openaiadapter
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -13,17 +14,23 @@ import (
 )
 
 type Client struct {
-	client openai.Client
-	model  string
+	client             openai.Client
+	model              string
+	transcriptionModel string
 }
 
-func New(apiKey, model string) (*Client, error) {
+func New(apiKey, model, transcriptionModel string) (*Client, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, errors.New("OPENAI_API_KEY is not configured")
 	}
+	transcriptionModel = strings.TrimSpace(transcriptionModel)
+	if transcriptionModel == "" {
+		transcriptionModel = "gpt-4o-mini-transcribe"
+	}
 	return &Client{
-		client: openai.NewClient(option.WithAPIKey(apiKey)),
-		model:  model,
+		client:             openai.NewClient(option.WithAPIKey(apiKey)),
+		model:              model,
+		transcriptionModel: transcriptionModel,
 	}, nil
 }
 
@@ -101,4 +108,42 @@ func (c *Client) RespondWithModelStream(ctx context.Context, model, instructions
 	}
 	usage.Model = model
 	return core.ModelResponse{Text: builder.String(), Usage: usage}, nil
+}
+
+func (c *Client) TranscribeAudio(ctx context.Context, audio []byte, filename, contentType, language string) (core.ModelResponse, error) {
+	if len(audio) == 0 {
+		return core.ModelResponse{}, errors.New("audio is empty")
+	}
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		filename = "telegram-voice.oga"
+	}
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		contentType = "audio/ogg"
+	}
+	language = strings.TrimSpace(language)
+	if language == "" {
+		language = "uk"
+	}
+	response, err := c.client.Audio.Transcriptions.New(ctx, openai.AudioTranscriptionNewParams{
+		File:           openai.File(bytes.NewReader(audio), filename, contentType),
+		Model:          openai.AudioModel(c.transcriptionModel),
+		Language:       openai.String(language),
+		Prompt:         openai.String("Українська голосова нотатка для персонального асистента NOVA."),
+		Temperature:    openai.Float(0),
+		ResponseFormat: openai.AudioResponseFormatJSON,
+	})
+	if err != nil {
+		return core.ModelResponse{}, err
+	}
+	return core.ModelResponse{
+		Text: strings.TrimSpace(response.Text),
+		Usage: core.NovaUsage{
+			Feature:      "telegram.voice.transcription",
+			Model:        c.transcriptionModel,
+			InputTokens:  int(response.Usage.InputTokens),
+			OutputTokens: int(response.Usage.OutputTokens),
+		},
+	}, nil
 }

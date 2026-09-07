@@ -19,12 +19,14 @@ type Config struct {
 	OpenAIMediumModel     string
 	OpenAIStrongModel     string
 	OpenAIEmbeddingModel  string
+	OpenAITranscribeModel string
 	Timezone              string
 	DailyBudgetUSD        float64
 	MonthlyBudgetUSD      float64
 	TelegramEnabled       bool
 	TelegramBotToken      string
 	TelegramAllowedUserID string
+	TelegramWebhookSecret string
 }
 
 func Load() (Config, error) {
@@ -52,12 +54,14 @@ func Load() (Config, error) {
 		OpenAIMediumModel:     stringEnv("OPENAI_MEDIUM_MODEL", "gpt-5.6-terra"),
 		OpenAIStrongModel:     stringEnv("OPENAI_STRONG_MODEL", "gpt-5.6-sol"),
 		OpenAIEmbeddingModel:  stringEnv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+		OpenAITranscribeModel: stringEnv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"),
 		Timezone:              stringEnv("NOVA_TIMEZONE", "Europe/Kyiv"),
 		DailyBudgetUSD:        daily,
 		MonthlyBudgetUSD:      monthly,
 		TelegramEnabled:       telegram,
 		TelegramBotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramAllowedUserID: os.Getenv("TELEGRAM_ALLOWED_USER_ID"),
+		TelegramWebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
 	}, nil
 }
 

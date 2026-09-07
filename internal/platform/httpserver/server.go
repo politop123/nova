@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"nova.local/core/internal/agent"
 	"nova.local/core/internal/core"
+	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/jobs"
 	"nova.local/core/internal/memory"
 	"nova.local/core/internal/platform/config"
@@ -32,6 +34,15 @@ type UsageResponder interface {
 	RespondWithModelUsage(ctx context.Context, model, instructions, input string) (core.ModelResponse, error)
 }
 
+type AudioTranscriber interface {
+	TranscribeAudio(ctx context.Context, audio []byte, filename, contentType, language string) (core.ModelResponse, error)
+}
+
+type TelegramClient interface {
+	SendMessage(ctx context.Context, chatID int64, text string) error
+	DownloadVoice(ctx context.Context, fileID string) (telegram.VoiceDownload, error)
+}
+
 type Dependencies struct {
 	Store         *storage.Store
 	Responder     Responder
@@ -39,6 +50,8 @@ type Dependencies struct {
 	UserID        string
 	Logger        *slog.Logger
 	ReminderQueue *asynq.Client
+	Telegram      TelegramClient
+	Transcriber   AudioTranscriber
 }
 
 type Server struct {
@@ -51,6 +64,8 @@ type Server struct {
 	userID        string
 	logger        *slog.Logger
 	reminderQueue *asynq.Client
+	telegram      TelegramClient
+	transcriber   AudioTranscriber
 	mux           *http.ServeMux
 }
 
@@ -69,6 +84,8 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 		userID:        deps.UserID,
 		logger:        logger,
 		reminderQueue: deps.ReminderQueue,
+		telegram:      deps.Telegram,
+		transcriber:   deps.Transcriber,
 		mux:           http.NewServeMux(),
 	}
 	if s.models.Simple == "" {
@@ -93,6 +110,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 	s.mux.HandleFunc("POST /api/v1/reminders", s.createReminder)
 	s.mux.HandleFunc("PATCH /api/v1/reminders/{id}", s.updateReminder)
 	s.mux.HandleFunc("DELETE /api/v1/reminders/{id}", s.cancelReminder)
+	s.mux.HandleFunc("POST /api/v1/telegram/webhook", s.telegramWebhook)
 	return s
 }
 
@@ -520,6 +538,188 @@ func (s *Server) cancelReminder(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) telegramWebhook(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.TelegramEnabled {
+		writeError(w, http.StatusServiceUnavailable, "telegram is not enabled")
+		return
+	}
+	if s.telegram == nil {
+		writeError(w, http.StatusServiceUnavailable, "telegram bot token is not configured")
+		return
+	}
+	if !s.telegramSecretValid(r) {
+		writeError(w, http.StatusUnauthorized, "telegram webhook secret is invalid")
+		return
+	}
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	var update telegram.Update
+	if err := decodeJSON(w, r, &update); err != nil {
+		return
+	}
+	if update.Message == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	message := *update.Message
+	if !s.telegramUserAllowed(message.From) {
+		s.logger.Warn("telegram update rejected by allowlist", "telegram_user_id", telegramUserID(message.From))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	userID := s.userID
+	if err := s.store.EnsureUser(r.Context(), userID); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	conversation, err := s.telegramConversation(r.Context(), userID)
+	if err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	text, modality, err := s.telegramMessageText(r.Context(), message)
+	if err != nil {
+		s.logger.Warn("telegram input could not be normalized", "message_id", message.MessageID, "error", err)
+		_ = s.telegram.SendMessage(r.Context(), message.Chat.ID, "Не змогла розібрати це повідомлення. Спробуй текстом або коротшим голосовим.")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	response, serviceErr := s.completeTextMessage(r.Context(), userID, conversation.ID, core.ChannelTelegram, modality, text)
+	if serviceErr != nil {
+		s.logger.Warn("telegram turn failed", "status", serviceErr.status, "error", serviceErr.err)
+		_ = s.telegram.SendMessage(r.Context(), message.Chat.ID, telegramServiceErrorText(serviceErr))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := s.telegram.SendMessage(r.Context(), message.Chat.ID, truncateTelegramText(response.Assistant.Content)); err != nil {
+		s.logger.Error("telegram response delivery failed", "chat_id", message.Chat.ID, "error", err)
+		writeError(w, http.StatusBadGateway, "telegram response delivery failed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) telegramSecretValid(r *http.Request) bool {
+	expected := strings.TrimSpace(s.cfg.TelegramWebhookSecret)
+	if expected == "" {
+		return true
+	}
+	actual := strings.TrimSpace(r.Header.Get("X-Telegram-Bot-Api-Secret-Token"))
+	return subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
+}
+
+func (s *Server) telegramUserAllowed(user *telegram.User) bool {
+	allowed := strings.TrimSpace(s.cfg.TelegramAllowedUserID)
+	if allowed == "" {
+		return true
+	}
+	if user == nil {
+		return false
+	}
+	return strconv.FormatInt(user.ID, 10) == allowed
+}
+
+func telegramUserID(user *telegram.User) string {
+	if user == nil {
+		return ""
+	}
+	return strconv.FormatInt(user.ID, 10)
+}
+
+func (s *Server) telegramConversation(ctx context.Context, userID string) (storage.Conversation, error) {
+	conversations, err := s.store.ListConversations(ctx, userID)
+	if err != nil {
+		return storage.Conversation{}, err
+	}
+	if len(conversations) > 0 {
+		return conversations[0], nil
+	}
+	return s.store.CreateConversation(ctx, userID, "Telegram")
+}
+
+func (s *Server) telegramMessageText(ctx context.Context, message telegram.Message) (string, string, error) {
+	text := strings.TrimSpace(message.Text)
+	if text != "" {
+		return text, core.ModalityText, nil
+	}
+	if message.Voice == nil {
+		return "", "", errors.New("telegram message has no supported text or voice input")
+	}
+	if s.transcriber == nil {
+		return "", "", errors.New("audio transcriber is not configured")
+	}
+	estimatedUsage := usage.EstimateRequest(s.cfg.OpenAITranscribeModel, "telegram voice transcription", 256)
+	if err := s.checkBudget(ctx, s.userID, estimatedUsage.EstimatedCostUSD); err != nil {
+		return "", "", err
+	}
+	download, err := s.telegram.DownloadVoice(ctx, message.Voice.FileID)
+	if err != nil {
+		return "", "", err
+	}
+	result, err := s.transcriber.TranscribeAudio(ctx, download.Data, download.Filename, download.ContentType, "uk")
+	if err != nil {
+		return "", "", err
+	}
+	transcript := strings.TrimSpace(result.Text)
+	if transcript == "" {
+		return "", "", errors.New("voice transcript is empty")
+	}
+	modelUsage := result.Usage
+	if modelUsage.Model == "" {
+		modelUsage.Model = s.cfg.OpenAITranscribeModel
+	}
+	if modelUsage.Feature == "" {
+		modelUsage.Feature = "telegram.voice.transcription"
+	}
+	if modelUsage.InputTokens == 0 {
+		modelUsage.InputTokens = estimatedUsage.InputTokens
+	}
+	if modelUsage.OutputTokens == 0 {
+		modelUsage.OutputTokens = usage.EstimateTokens(transcript)
+	}
+	modelUsage.EstimatedCostUSD = usage.EstimateCost(
+		modelUsage.Model,
+		modelUsage.InputTokens,
+		modelUsage.CachedInputTokens,
+		modelUsage.OutputTokens,
+	)
+	if err := s.store.RecordUsageEvent(ctx, storage.UsageEvent{
+		UserID: s.userID, Feature: modelUsage.Feature, Model: modelUsage.Model,
+		InputTokens: modelUsage.InputTokens, CachedInputTokens: modelUsage.CachedInputTokens,
+		OutputTokens: modelUsage.OutputTokens, EstimatedCostUSD: modelUsage.EstimatedCostUSD,
+		TraceID: newTraceID(),
+	}); err != nil {
+		return "", "", err
+	}
+	return transcript, core.ModalityVoice, nil
+}
+
+func telegramServiceErrorText(err *serviceError) string {
+	if err == nil {
+		return "Не змогла обробити повідомлення."
+	}
+	switch err.status {
+	case http.StatusTooManyRequests:
+		return "Ліміт бюджету NOVA на сьогодні вичерпано. Я зупинила модельні виклики, щоб не створювати неконтрольовані витрати."
+	case http.StatusServiceUnavailable:
+		return "Сервіс NOVA тимчасово недоступний. Спробуй ще раз трохи пізніше."
+	default:
+		return "Не змогла отримати відповідь. Спробуй ще раз."
+	}
+}
+
+func truncateTelegramText(text string) string {
+	text = strings.TrimSpace(text)
+	if len([]rune(text)) <= 3900 {
+		return text
+	}
+	runes := []rune(text)
+	return string(runes[:3900]) + "\n\n…"
+}
+
 func (s *Server) buildTaskRecord(userID string, request createTaskRequest) (storage.Task, error) {
 	title := strings.TrimSpace(request.Title)
 	if title == "" {
@@ -850,14 +1050,6 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
 		return
 	}
-	userID := s.requestUserID(r)
-	conversationID := r.PathValue("id")
-	conversation, err := s.store.GetConversation(r.Context(), userID, conversationID)
-	if err != nil {
-		s.writeConversationError(w, err)
-		return
-	}
-
 	var request createMessageRequest
 	if err := decodeJSON(w, r, &request); err != nil {
 		return
@@ -868,64 +1060,84 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response, serviceErr := s.completeTextMessage(r.Context(), s.requestUserID(r), r.PathValue("id"), "web", core.ModalityText, request.Text)
+	if serviceErr != nil {
+		s.writeServiceError(w, serviceErr)
+		return
+	}
+	writeJSON(w, http.StatusCreated, response)
+}
+
+type serviceError struct {
+	status  int
+	message string
+	err     error
+}
+
+func newServiceError(status int, message string, err error) *serviceError {
+	return &serviceError{status: status, message: message, err: err}
+}
+
+func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID, channel, modality, text string) (createMessageResponse, *serviceError) {
+	conversation, err := s.store.GetConversation(ctx, userID, conversationID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return createMessageResponse{}, newServiceError(http.StatusNotFound, "conversation not found", err)
+		}
+		return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", err)
+	}
+
 	traceID := newTraceID()
-	userMessage, err := s.store.AddMessage(r.Context(), storage.Message{
+	userMessage, err := s.store.AddMessage(ctx, storage.Message{
 		ConversationID: conversationID,
 		UserID:         userID,
 		Role:           "user",
-		Channel:        "web",
-		Modality:       "text",
-		Content:        request.Text,
+		Channel:        channel,
+		Modality:       modality,
+		Content:        text,
 		TraceID:        traceID,
 	})
 	if err != nil {
-		s.writeStorageError(w, err)
-		return
+		return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", err)
 	}
 
-	route := agent.RouteRequest(agent.Request{Text: request.Text}, s.models)
+	route := agent.RouteRequest(agent.Request{Text: text}, s.models)
 	assistantText := deterministicResponse(route.Intent)
 	var modelUsage *core.NovaUsage
 	modelStartedAt := time.Now()
 	if route.Mode == "model" {
 		if s.responder == nil {
-			writeError(w, http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured")
-			return
+			return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "OPENAI_API_KEY is not configured", nil)
 		}
-		messages, listErr := s.store.ListMessages(r.Context(), userID, conversationID, 100)
+		messages, listErr := s.store.ListMessages(ctx, userID, conversationID, 100)
 		if listErr != nil {
-			s.writeStorageError(w, listErr)
-			return
+			return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", listErr)
 		}
-		modelInput, listErr := s.buildModelInput(r.Context(), userID, conversationID, messages)
+		modelInput, listErr := s.buildModelInput(ctx, userID, conversationID, messages)
 		if listErr != nil {
-			s.writeStorageError(w, listErr)
-			return
+			return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", listErr)
 		}
 		estimatedUsage := usage.EstimateRequest(route.Model, agent.SystemProfile+"\n"+modelInput, 512)
-		if err := s.checkBudget(r.Context(), userID, estimatedUsage.EstimatedCostUSD); err != nil {
+		if err := s.checkBudget(ctx, userID, estimatedUsage.EstimatedCostUSD); err != nil {
 			if errors.Is(err, errBudgetExceeded) {
-				writeError(w, http.StatusTooManyRequests, "NOVA budget limit reached; try again after the budget period resets")
-				return
+				return createMessageResponse{}, newServiceError(http.StatusTooManyRequests, "NOVA budget limit reached; try again after the budget period resets", err)
 			}
 			s.logger.Error("budget check failed", "trace_id", traceID, "error", err)
-			writeError(w, http.StatusServiceUnavailable, "budget check is temporarily unavailable")
-			return
+			return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "budget check is temporarily unavailable", err)
 		}
 		if usageResponder, ok := s.responder.(UsageResponder); ok {
 			var result core.ModelResponse
-			result, err = usageResponder.RespondWithModelUsage(r.Context(), route.Model, agent.SystemProfile, modelInput)
+			result, err = usageResponder.RespondWithModelUsage(ctx, route.Model, agent.SystemProfile, modelInput)
 			assistantText = result.Text
 			modelUsage = &result.Usage
 		} else {
-			assistantText, err = s.responder.RespondWithModel(r.Context(), route.Model, agent.SystemProfile, modelInput)
+			assistantText, err = s.responder.RespondWithModel(ctx, route.Model, agent.SystemProfile, modelInput)
 			estimatedUsage = usage.EstimateResponse(route.Model, modelInput, assistantText)
 			modelUsage = &estimatedUsage
 		}
 		if err != nil {
 			s.logger.Error("model response failed", "trace_id", traceID, "error", err)
-			writeError(w, http.StatusBadGateway, "model response failed")
-			return
+			return createMessageResponse{}, newServiceError(http.StatusBadGateway, "model response failed", err)
 		}
 		if modelUsage == nil {
 			modelUsage = &estimatedUsage
@@ -944,7 +1156,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 			modelUsage.CachedInputTokens,
 			modelUsage.OutputTokens,
 		)
-		if err := s.store.RecordUsageEvent(r.Context(), storage.UsageEvent{
+		if err := s.store.RecordUsageEvent(ctx, storage.UsageEvent{
 			UserID: userID, Feature: modelUsage.Feature, Model: modelUsage.Model,
 			InputTokens: modelUsage.InputTokens, CachedInputTokens: modelUsage.CachedInputTokens,
 			OutputTokens: modelUsage.OutputTokens, EstimatedCostUSD: modelUsage.EstimatedCostUSD,
@@ -952,26 +1164,24 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 			TraceID:   traceID,
 		}); err != nil {
 			s.logger.Error("usage event failed", "trace_id", traceID, "error", err)
-			writeError(w, http.StatusServiceUnavailable, "usage accounting is temporarily unavailable")
-			return
+			return createMessageResponse{}, newServiceError(http.StatusServiceUnavailable, "usage accounting is temporarily unavailable", err)
 		}
 	}
 
-	assistantMessage, err := s.store.AddMessage(r.Context(), storage.Message{
+	assistantMessage, err := s.store.AddMessage(ctx, storage.Message{
 		ConversationID: conversationID,
 		UserID:         userID,
 		Role:           "assistant",
-		Channel:        "web",
+		Channel:        channel,
 		Modality:       "text",
 		Content:        assistantText,
 		TraceID:        traceID,
 	})
 	if err != nil {
-		s.writeStorageError(w, err)
-		return
+		return createMessageResponse{}, newServiceError(http.StatusInternalServerError, "storage request failed", err)
 	}
-	s.refreshConversationSummary(r.Context(), userID, conversationID)
-	writeJSON(w, http.StatusCreated, createMessageResponse{
+	s.refreshConversationSummary(ctx, userID, conversationID)
+	return createMessageResponse{
 		Conversation: conversation,
 		UserMessage:  userMessage,
 		Assistant:    assistantMessage,
@@ -980,7 +1190,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 			Tier: string(route.Tier), Model: stringOrEmpty(route.Model),
 		},
 		Usage: modelUsage,
-	})
+	}, nil
 }
 
 var errBudgetExceeded = errors.New("budget exceeded")
@@ -1241,6 +1451,16 @@ func (s *Server) writeReminderError(w http.ResponseWriter, err error) {
 		return
 	}
 	s.writeStorageError(w, err)
+}
+
+func (s *Server) writeServiceError(w http.ResponseWriter, err *serviceError) {
+	if err == nil {
+		return
+	}
+	if err.err != nil && err.status >= http.StatusInternalServerError {
+		s.logger.Error("service request failed", "status", err.status, "error", err.err)
+	}
+	writeError(w, err.status, err.message)
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {

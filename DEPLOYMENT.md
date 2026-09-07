@@ -48,10 +48,15 @@ POSTGRES_DB=nova
 POSTGRES_USER=nova
 POSTGRES_PASSWORD=replace-with-a-long-random-password
 OPENAI_API_KEY=
+OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 NOVA_TIMEZONE=Europe/Kyiv
 DAILY_COST_BUDGET_USD=2
 MONTHLY_COST_BUDGET_USD=30
 WEB_ORIGIN=http://SERVER_IP
+TELEGRAM_ENABLED=false
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_USER_ID=
+TELEGRAM_WEBHOOK_SECRET=
 DOMAIN=:80
 HEALTH_URL=http://127.0.0.1/health
 ```
@@ -68,6 +73,31 @@ docker compose --env-file .env -f docker-compose.prod.yml up -d api worker
 ```
 
 Set `OPENAI_API_KEY` in that file and keep the existing daily and monthly budget limits. Do not paste the key into source files, commits, logs, or browser-visible frontend configuration.
+
+## Telegram bot
+
+Telegram is the primary user-facing channel for NOVA. The Web app remains the auxiliary dashboard for chat, memory, tasks, and operational checks.
+
+After creating a bot in BotFather, set these values in `/opt/nova/.env`:
+
+```dotenv
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=replace-with-bot-token
+TELEGRAM_ALLOWED_USER_ID=replace-with-your-numeric-telegram-user-id
+TELEGRAM_WEBHOOK_SECRET=replace-with-a-long-random-secret
+```
+
+Then restart the API and register the webhook:
+
+```sh
+cd /opt/nova
+docker compose --env-file .env -f docker-compose.prod.yml up -d api worker
+curl -fsS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d "url=https://nova-app.i-shevchhuukk.workers.dev/api/v1/telegram/webhook" \
+  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+```
+
+The webhook accepts Telegram text and voice messages. Voice input is downloaded server-side, transcribed with `OPENAI_TRANSCRIBE_MODEL`, normalized into the same NOVA conversation path as Web, and answered back through the bot. Keep the allowlist enabled before exposing the webhook.
 
 ## Domain and Cloudflare
 

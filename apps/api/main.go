@@ -15,6 +15,7 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 	"nova.local/core/internal/agent"
 	"nova.local/core/internal/ai/openaiadapter"
+	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/platform/config"
 	"nova.local/core/internal/platform/httpserver"
 	"nova.local/core/internal/storage"
@@ -53,12 +54,22 @@ func main() {
 
 	var responder *openaiadapter.Client
 	if cfg.OpenAIAPIKey != "" {
-		responder, err = openaiadapter.New(cfg.OpenAIAPIKey, cfg.OpenAITextModel)
+		responder, err = openaiadapter.New(cfg.OpenAIAPIKey, cfg.OpenAITextModel, cfg.OpenAITranscribeModel)
 		if err != nil {
 			logger.Warn("OpenAI adapter is disabled", "error", err)
 		}
 	} else {
 		logger.Warn("OPENAI_API_KEY is not configured; deterministic routes remain available")
+	}
+
+	var telegramClient *telegram.Client
+	if cfg.TelegramBotToken != "" {
+		telegramClient, err = telegram.NewClient(cfg.TelegramBotToken)
+		if err != nil {
+			logger.Warn("Telegram adapter is disabled", "error", err)
+		}
+	} else if cfg.TelegramEnabled {
+		logger.Warn("TELEGRAM_ENABLED is true but TELEGRAM_BOT_TOKEN is not configured")
 	}
 
 	server := &http.Server{
@@ -72,6 +83,8 @@ func main() {
 			UserID:        cfg.NovaUserID,
 			Logger:        logger,
 			ReminderQueue: reminderQueue,
+			Telegram:      telegramClient,
+			Transcriber:   responder,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
