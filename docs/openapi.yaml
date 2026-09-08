@@ -395,6 +395,17 @@ paths:
           description: Reminder marked as cancelled.
         '404':
           description: Reminder not found.
+  /api/v1/status:
+    get:
+      operationId: getOperationalStatus
+      description: Returns a compact operational snapshot for NOVA Core, infrastructure, Telegram, reminders, worker, OpenAI configuration, and Git/deploy status.
+      responses:
+        '200':
+          description: Current operational status. Degraded components are reported in the body instead of failing the request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationalStatus'
   /api/v1/devops/git/status:
     get:
       operationId: getGitStatus
@@ -579,6 +590,35 @@ components:
         status: { type: string, enum: [scheduled, delivered, cancelled] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    OperationalStatus:
+      type: object
+      required: [service, status, version, timestamp, checks]
+      properties:
+        service:
+          type: string
+          example: nova-api
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+          example: 0.1.0
+        timestamp:
+          type: string
+          format: date-time
+        checks:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/OperationalStatusCheck'
+        git:
+          $ref: '#/components/schemas/GitStatus'
+    OperationalStatusCheck:
+      type: object
+      required: [label, status]
+      properties:
+        label: { type: string, example: Telegram }
+        status: { type: string, enum: [ok, degraded, not_configured] }
+        detail: { type: string }
     GitStatus:
       type: object
       required: [repository, branch, latestCommit, deployedCommit, deployment, checkedAt]

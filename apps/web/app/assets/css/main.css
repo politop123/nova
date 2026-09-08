@@ -370,7 +370,7 @@ small {
 .command-deck {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(12rem, 0.22fr));
+  grid-template-columns: minmax(0, 1fr) repeat(4, minmax(10.75rem, 0.18fr));
   gap: 0.9rem;
   overflow: hidden;
   margin-top: 1rem;

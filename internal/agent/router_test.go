@@ -24,6 +24,16 @@ func TestRouteRequest(t *testing.T) {
 		t.Fatalf("unexpected deploy route: %+v", got)
 	}
 
+	got = RouteRequest(Request{Text: "NOVA, що з тобою? Чи все працює?"}, models)
+	if got.Mode != "deterministic" || got.Intent != "system.status" {
+		t.Fatalf("unexpected system status route: %+v", got)
+	}
+
+	got = RouteRequest(Request{Text: "/status"}, models)
+	if got.Mode != "deterministic" || got.Intent != "system.status" {
+		t.Fatalf("unexpected slash status route: %+v", got)
+	}
+
 	got = RouteRequest(Request{Text: "Що там з продуктом NOVA?"}, models)
 	if got.Mode == "deterministic" && got.Intent == "git.status" {
 		t.Fatalf("product question should not be treated as prod deploy: %+v", got)

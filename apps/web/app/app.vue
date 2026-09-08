@@ -100,6 +100,21 @@ interface GitDeploymentState {
   summary: string;
 }
 
+interface OperationalStatus {
+  service: string;
+  status: 'ok' | 'degraded' | string;
+  version: string;
+  timestamp: string;
+  checks: Record<string, OperationalStatusCheck>;
+  git?: GitStatus;
+}
+
+interface OperationalStatusCheck {
+  label: string;
+  status: 'ok' | 'degraded' | 'not_configured' | string;
+  detail?: string;
+}
+
 const apiState = ref<ApiState>('checking');
 const activeView = ref<ViewName>('chat');
 const timezone = ref('Europe/Kyiv');
@@ -147,6 +162,9 @@ const reminderForm = reactive({
 const gitStatus = ref<GitStatus | null>(null);
 const gitStatusLoading = ref(false);
 const gitStatusError = ref('');
+const operationalStatus = ref<OperationalStatus | null>(null);
+const operationalStatusLoading = ref(false);
+const operationalStatusError = ref('');
 
 const tabs: Array<{ key: ViewName; label: string }> = [
   { key: 'chat', label: 'Чат' },
@@ -251,10 +269,26 @@ const gitStatusDetail = computed(() => {
     : 'workflow без даних';
   return `${gitDeploymentLabels[gitStatus.value.deployment.state] ?? gitStatus.value.deployment.state} · ${deployed} · ${workflow}`;
 });
+const operationalStatusTitle = computed(() => {
+  if (operationalStatusLoading.value) return 'Перевіряю системи';
+  if (operationalStatusError.value) return 'Статус недоступний';
+  if (!operationalStatus.value) return 'Очікую Core';
+  return operationalStatus.value.status === 'ok' ? 'все живе' : 'є нюанси';
+});
+const operationalStatusDetail = computed(() => {
+  if (operationalStatusError.value) return operationalStatusError.value;
+  if (!operationalStatus.value) return 'API, база, Redis, worker, Telegram';
+  const attention = Object.values(operationalStatus.value.checks)
+    .filter((check) => check.status !== 'ok')
+    .map((check) => `${check.label}: ${checkStatusLabel(check.status)}`);
+  if (!attention.length) return 'API, DB, Redis, Worker, Telegram — ok';
+  return attention.slice(0, 3).join(' · ');
+});
 const quickPrompts = [
   'Нагадай через 10 хвилин перевірити NOVA',
   'Запамʼятай, що Telegram — мій основний канал',
   'Які задачі зараз відкриті?',
+  'NOVA, що з тобою? Чи все працює?',
   'Який останній commit у NOVA?',
   'Чи задеплоївся останній commit?',
 ];
@@ -280,6 +314,7 @@ async function bootstrapApp() {
       loadMemories(),
       loadTasks(),
       loadReminders(),
+      loadOperationalStatus(),
       loadGitStatus(),
     ]);
     startMessagePolling();
@@ -381,6 +416,23 @@ async function loadGitStatus() {
   }
 }
 
+async function loadOperationalStatus() {
+  operationalStatusLoading.value = true;
+  try {
+    operationalStatus.value = await apiFetch<OperationalStatus>('/api/v1/status');
+    operationalStatusError.value = '';
+    if (operationalStatus.value.git) {
+      gitStatus.value = operationalStatus.value.git;
+      gitStatusError.value = '';
+    }
+  } catch (error: any) {
+    operationalStatus.value = null;
+    operationalStatusError.value = normalizeError(error, 'Статус NOVA тимчасово недоступний.');
+  } finally {
+    operationalStatusLoading.value = false;
+  }
+}
+
 async function sendMessage() {
   const text = input.value.trim();
   if (!text || sending.value || !conversation.value) return;
@@ -462,6 +514,9 @@ function consumeSSEFrame(frame: string) {
     }
     if (payload.route?.intent === 'git.status') {
       void loadGitStatus();
+    }
+    if (payload.route?.intent === 'system.status') {
+      void loadOperationalStatus();
     }
   } else if (event === 'error') {
     throw new Error(payload.message ?? 'Потік відповіді завершився з помилкою.');
@@ -693,6 +748,13 @@ function workflowStatusLabel(run: GitWorkflowRun) {
   return run.status || 'невідомий';
 }
 
+function checkStatusLabel(status: OperationalStatusCheck['status']) {
+  if (status === 'ok') return 'ok';
+  if (status === 'not_configured') return 'не налаштовано';
+  if (status === 'degraded') return 'проблема';
+  return status;
+}
+
 function memoryKindLabel(kind: string) {
   const labels: Record<string, string> = {
     preference: 'Вподобання',
@@ -760,6 +822,12 @@ function memoryKindLabel(kind: string) {
               : 'Канал оберемо під задачу'
           }}
         </p>
+      </div>
+
+      <div class="command-status-card">
+        <span>Стан NOVA</span>
+        <strong>{{ operationalStatusTitle }}</strong>
+        <p>{{ operationalStatusDetail }}</p>
       </div>
 
       <div class="command-status-card">

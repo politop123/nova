@@ -48,6 +48,8 @@ func DetectDeterministicIntent(text string) string {
 		return "confirmation.reject"
 	case hasGitStatusRequest(normalized):
 		return "git.status"
+	case hasSystemStatusRequest(normalized):
+		return "system.status"
 	case hasReminderRequest(normalized):
 		return "reminder.create"
 	default:
@@ -76,6 +78,22 @@ func hasGitStatusRequest(normalized string) bool {
 		"остан", "який", "яка", "що там", "статус", "стан",
 		"задепло", "депло", "deploy", "workflow", "actions",
 	}) || hasProdToken(normalized)
+}
+
+func hasSystemStatusRequest(normalized string) bool {
+	if normalized == "/status" || normalized == "status" || normalized == "health" {
+		return true
+	}
+	if strings.Contains(normalized, "що з тобою") ||
+		strings.Contains(normalized, "як ти працюєш") ||
+		strings.Contains(normalized, "чи все працює") ||
+		strings.Contains(normalized, "ти жива") ||
+		strings.Contains(normalized, "ти живий") {
+		return true
+	}
+	hasStatusWord := containsAny(normalized, []string{"статус", "стан", "health", "здоров"})
+	hasNOVAContext := containsAny(normalized, []string{"nova", "нова", "core", "кор", "систем", "сервер", "бек", "backend"})
+	return hasStatusWord && hasNOVAContext
 }
 
 func containsAny(value string, needles []string) bool {

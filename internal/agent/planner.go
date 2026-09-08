@@ -16,6 +16,7 @@ Rules:
 - If the user provides a stable personal fact, contact detail, identity detail, family detail, or the answer to a previous "I do not know yet; share it and I will remember" prompt, create a memory.save action even when the user did not explicitly say "remember this".
 - Save personal facts as short, self-contained Ukrainian memory lines, for example "Номер телефону користувача: ..." or "Номер телефону дружини користувача: ...".
 - If the user asks about NOVA's own repository, latest commit, GitHub Actions, deploy status, production version, or whether a commit is deployed, use intent "git.status" and no actions. The backend will read the real server-side GitHub/deployment status.
+- If the user asks whether NOVA is alive, working, healthy, online, or asks for system/API/Telegram/reminder/worker status, use intent "system.status" and no actions. The backend will read the real operational status.
 - If the user only wants a normal conversational answer, use intent "reply" and no actions.
 - If the user intent is unclear, use intent "unknown", no actions, and ask one concise Ukrainian clarifying question in reply.
 - For reminders and tasks, resolve dates using currentTime and timezone. Output RFC3339 timestamps with an explicit offset or Z.
@@ -29,7 +30,8 @@ Available action types:
 - reminder.create: create a scheduled reminder.
 
 Read-only intents:
-- git.status: answer a question about NOVA's GitHub repository, latest commit, deploy workflow, or production commit.`
+- git.status: answer a question about NOVA's GitHub repository, latest commit, deploy workflow, or production commit.
+- system.status: answer a question about NOVA Core health, API, database, Redis, worker, reminders, Telegram, OpenAI configuration, and Git/deploy status.`
 
 type PlannerInput struct {
 	CurrentTime    string            `json:"currentTime"`
@@ -83,6 +85,13 @@ func PlannerCapabilities() []Capability {
 			Intent:      "git.status",
 			ActionType:  "",
 			Description: "Read NOVA repository, latest commit, GitHub Actions, deployment workflow, or production commit status.",
+			Required:    []string{},
+			Optional:    []string{},
+		},
+		{
+			Intent:      "system.status",
+			ActionType:  "",
+			Description: "Read NOVA Core health, API, database, Redis, worker, reminders, Telegram, OpenAI configuration, and Git/deploy status.",
 			Required:    []string{},
 			Optional:    []string{},
 		},

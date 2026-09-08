@@ -117,6 +117,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 	s.mux.HandleFunc("POST /api/v1/memories", s.createMemory)
 	s.mux.HandleFunc("PATCH /api/v1/memories/{id}", s.updateMemory)
 	s.mux.HandleFunc("DELETE /api/v1/memories/{id}", s.deleteMemory)
+	s.mux.HandleFunc("GET /api/v1/status", s.getOperationalStatus)
 	s.mux.HandleFunc("GET /api/v1/tasks", s.listTasks)
 	s.mux.HandleFunc("POST /api/v1/tasks", s.createTask)
 	s.mux.HandleFunc("PATCH /api/v1/tasks/{id}", s.updateTask)
@@ -1153,6 +1154,9 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 		if route.Intent == core.IntentGitStatus {
 			assistantText = s.gitStatusAssistantText(ctx, text)
 		}
+		if route.Intent == core.IntentSystemStatus {
+			assistantText = s.systemStatusAssistantText(ctx, userID)
+		}
 		if route.Intent == core.IntentReminderCreate {
 			var actionErr *serviceError
 			assistantText, createdReminder, actionErr = s.createReminderFromChatCommand(ctx, userID, channel, text, traceID)
@@ -1358,6 +1362,9 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 		assistantText = deterministicResponse(route.Intent)
 		if route.Intent == core.IntentGitStatus {
 			assistantText = s.gitStatusAssistantText(r.Context(), request.Text)
+		}
+		if route.Intent == core.IntentSystemStatus {
+			assistantText = s.systemStatusAssistantText(r.Context(), userID)
 		}
 		if route.Intent == core.IntentReminderCreate {
 			var actionErr *serviceError
@@ -1594,6 +1601,8 @@ func deterministicResponse(intent string) string {
 		return "Команду нагадування розпізнано. Створити точне нагадування вже можна у вкладці «Задачі»."
 	case core.IntentGitStatus:
 		return "Перевіряю GitHub і production-версію NOVA."
+	case core.IntentSystemStatus:
+		return "Перевіряю стан NOVA Core."
 	case "interaction.stop":
 		return "Поточну дію зупинено."
 	case "confirmation.approve":

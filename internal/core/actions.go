@@ -7,6 +7,7 @@ const (
 	IntentTaskCreate     = "task.create"
 	IntentReminderCreate = "reminder.create"
 	IntentGitStatus      = "git.status"
+	IntentSystemStatus   = "system.status"
 )
 
 const (

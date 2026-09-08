@@ -306,3 +306,31 @@ func TestFormatGitStatusAssistantTextForSpecificCommit(t *testing.T) {
 		t.Fatalf("unexpected assistant text: %q", got)
 	}
 }
+
+func TestFormatSystemStatusAssistantText(t *testing.T) {
+	status := operationalStatusResponse{
+		Status: checkStatusDegraded,
+		Checks: map[string]operationalStatusCheck{
+			"api":      {Label: "API", Status: checkStatusOK, Detail: "Core відповідає."},
+			"postgres": {Label: "PostgreSQL", Status: checkStatusOK, Detail: "База даних онлайн."},
+			"redis":    {Label: "Redis", Status: checkStatusOK, Detail: "Redis онлайн."},
+			"worker":   {Label: "Worker", Status: checkStatusDegraded, Detail: "У Redis не видно активного worker."},
+			"telegram": {Label: "Telegram", Status: checkStatusOK, Detail: "Telegram готовий для відповідей і нагадувань."},
+		},
+		Git: &githubstatus.Status{
+			Branch:          "dev",
+			LatestCommit:    githubstatus.Commit{SHA: "abcdef1234567890", ShortSHA: "abcdef1", Title: "feat: status"},
+			DeployedCommit:  githubstatus.CommitRef{SHA: "1234567890abcdef", ShortSHA: "1234567"},
+			Deployment:      githubstatus.Deployment{State: "behind", IsLatest: false, Summary: "Production відстає від останнього commit у Git."},
+			LatestDeployRun: nil,
+		},
+	}
+
+	got := formatSystemStatusAssistantText(status)
+	if !strings.Contains(got, "Стан NOVA") || !strings.Contains(got, "Worker") || !strings.Contains(got, "latest `abcdef1`") {
+		t.Fatalf("unexpected system status text: %q", got)
+	}
+	if !strings.Contains(got, "Потребує уваги") {
+		t.Fatalf("expected attention summary, got %q", got)
+	}
+}
