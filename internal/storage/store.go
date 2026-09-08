@@ -119,6 +119,27 @@ type ReminderUpdate struct {
 	Status            *string
 }
 
+const (
+	ReminderDeliveryAttempted = "attempted"
+	ReminderDeliverySent      = "sent"
+	ReminderDeliveryFailed    = "failed"
+	ReminderDeliverySkipped   = "skipped"
+)
+
+type ReminderDeliveryEvent struct {
+	ID             string    `json:"id"`
+	ReminderID     string    `json:"reminderId"`
+	UserID         string    `json:"userId"`
+	Channel        string    `json:"channel"`
+	Provider       string    `json:"provider,omitempty"`
+	Status         string    `json:"status"`
+	Attempt        int       `json:"attempt"`
+	Detail         string    `json:"detail,omitempty"`
+	ErrorText      string    `json:"errorText,omitempty"`
+	IdempotencyKey string    `json:"idempotencyKey,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
 type AgentAction struct {
 	ID             string    `json:"id"`
 	UserID         string    `json:"userId"`
@@ -757,6 +778,116 @@ func (s *Store) CancelReminder(ctx context.Context, userID, reminderID string) e
 	return err
 }
 
+func (s *Store) RecordReminderDeliveryEvent(ctx context.Context, event ReminderDeliveryEvent) (ReminderDeliveryEvent, error) {
+	if s == nil || s.db == nil {
+		return ReminderDeliveryEvent{}, errors.New("database is not configured")
+	}
+	event.ReminderID = strings.TrimSpace(event.ReminderID)
+	event.UserID = strings.TrimSpace(event.UserID)
+	event.Channel = strings.TrimSpace(event.Channel)
+	event.Provider = strings.TrimSpace(event.Provider)
+	event.Status = strings.TrimSpace(event.Status)
+	event.Detail = strings.TrimSpace(event.Detail)
+	event.ErrorText = strings.TrimSpace(event.ErrorText)
+	event.IdempotencyKey = strings.TrimSpace(event.IdempotencyKey)
+	if event.ReminderID == "" {
+		return ReminderDeliveryEvent{}, errors.New("reminderId is required")
+	}
+	if event.UserID == "" {
+		return ReminderDeliveryEvent{}, errors.New("userId is required")
+	}
+	if event.Channel == "" {
+		return ReminderDeliveryEvent{}, errors.New("channel is required")
+	}
+	if event.Status == "" {
+		event.Status = ReminderDeliveryAttempted
+	}
+	if !validReminderDeliveryStatus(event.Status) {
+		return ReminderDeliveryEvent{}, errors.New("delivery status must be attempted, sent, failed, or skipped")
+	}
+	if event.Attempt < 1 {
+		event.Attempt = 1
+	}
+	var result ReminderDeliveryEvent
+	err := s.db.QueryRow(ctx, `
+		INSERT INTO reminder_delivery_events (
+			reminder_id, user_id, channel, provider, status, attempt, detail, error_text, idempotency_key
+		)
+		VALUES (
+			$1::uuid, $2::uuid, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, '')
+		)
+		ON CONFLICT (user_id, idempotency_key) DO UPDATE
+		SET detail = EXCLUDED.detail,
+			error_text = EXCLUDED.error_text
+		RETURNING id::text, reminder_id::text, user_id::text, channel, COALESCE(provider, ''),
+			status, attempt, COALESCE(detail, ''), COALESCE(error_text, ''), COALESCE(idempotency_key, ''),
+			created_at
+	`, event.ReminderID, event.UserID, event.Channel, event.Provider, event.Status, event.Attempt,
+		event.Detail, event.ErrorText, event.IdempotencyKey).Scan(
+		&result.ID,
+		&result.ReminderID,
+		&result.UserID,
+		&result.Channel,
+		&result.Provider,
+		&result.Status,
+		&result.Attempt,
+		&result.Detail,
+		&result.ErrorText,
+		&result.IdempotencyKey,
+		&result.CreatedAt,
+	)
+	if err != nil {
+		return ReminderDeliveryEvent{}, fmt.Errorf("record reminder delivery event: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Store) ListReminderDeliveryEvents(ctx context.Context, userID, reminderID string, limit int) ([]ReminderDeliveryEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("database is not configured")
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, reminder_id::text, user_id::text, channel, COALESCE(provider, ''),
+			status, attempt, COALESCE(detail, ''), COALESCE(error_text, ''), COALESCE(idempotency_key, ''),
+			created_at
+		FROM reminder_delivery_events
+		WHERE user_id = $1::uuid AND reminder_id = $2::uuid
+		ORDER BY created_at DESC
+		LIMIT $3
+	`, userID, reminderID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list reminder delivery events: %w", err)
+	}
+	defer rows.Close()
+	result := make([]ReminderDeliveryEvent, 0)
+	for rows.Next() {
+		var event ReminderDeliveryEvent
+		if err := rows.Scan(
+			&event.ID,
+			&event.ReminderID,
+			&event.UserID,
+			&event.Channel,
+			&event.Provider,
+			&event.Status,
+			&event.Attempt,
+			&event.Detail,
+			&event.ErrorText,
+			&event.IdempotencyKey,
+			&event.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan reminder delivery event: %w", err)
+		}
+		result = append(result, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list reminder delivery events rows: %w", err)
+	}
+	return result, nil
+}
+
 func (s *Store) CreateScheduledJob(ctx context.Context, jobType, entityID string, runAt time.Time) error {
 	if s == nil || s.db == nil {
 		return errors.New("database is not configured")
@@ -950,4 +1081,13 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func validReminderDeliveryStatus(value string) bool {
+	switch value {
+	case ReminderDeliveryAttempted, ReminderDeliverySent, ReminderDeliveryFailed, ReminderDeliverySkipped:
+		return true
+	default:
+		return false
+	}
 }

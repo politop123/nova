@@ -395,6 +395,34 @@ paths:
           description: Reminder marked as cancelled.
         '404':
           description: Reminder not found.
+  /api/v1/reminders/{reminderId}/delivery-events:
+    parameters:
+      - name: reminderId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listReminderDeliveryEvents
+      description: Returns recent delivery attempts and outcomes for one reminder.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Reminder delivery history.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReminderDeliveryEvent' }
+        '404':
+          description: Reminder not found.
   /api/v1/status:
     get:
       operationId: getOperationalStatus
@@ -590,6 +618,21 @@ components:
         status: { type: string, enum: [scheduled, delivered, cancelled] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    ReminderDeliveryEvent:
+      type: object
+      required: [id, reminderId, userId, channel, status, attempt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        reminderId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        channel: { type: string, enum: [web, telegram] }
+        provider: { type: string, example: telegram_bot }
+        status: { type: string, enum: [attempted, sent, failed, skipped] }
+        attempt: { type: integer, minimum: 1 }
+        detail: { type: string }
+        errorText: { type: string }
+        idempotencyKey: { type: string }
+        createdAt: { type: string, format: date-time }
     OperationalStatus:
       type: object
       required: [service, status, version, timestamp, checks]

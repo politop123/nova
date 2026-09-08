@@ -124,6 +124,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client, deps De
 	s.mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.cancelTask)
 	s.mux.HandleFunc("GET /api/v1/reminders", s.listReminders)
 	s.mux.HandleFunc("POST /api/v1/reminders", s.createReminder)
+	s.mux.HandleFunc("GET /api/v1/reminders/{id}/delivery-events", s.listReminderDeliveryEvents)
 	s.mux.HandleFunc("PATCH /api/v1/reminders/{id}", s.updateReminder)
 	s.mux.HandleFunc("DELETE /api/v1/reminders/{id}", s.cancelReminder)
 	s.mux.HandleFunc("GET /api/v1/devops/git/status", s.getGitStatus)
@@ -510,6 +511,29 @@ func (s *Server) createReminder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listReminderDeliveryEvents(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage is not configured")
+		return
+	}
+	userID := s.requestUserID(r)
+	if err := s.store.EnsureUser(r.Context(), userID); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	reminderID := r.PathValue("id")
+	if _, err := s.store.GetReminder(r.Context(), userID, reminderID); err != nil {
+		s.writeReminderError(w, err)
+		return
+	}
+	events, err := s.store.ListReminderDeliveryEvents(r.Context(), userID, reminderID, parseLimit(r.URL.Query().Get("limit"), 20))
+	if err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 func (s *Server) updateReminder(w http.ResponseWriter, r *http.Request) {

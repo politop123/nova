@@ -55,6 +55,20 @@ interface ReminderRecord {
   updatedAt: string;
 }
 
+interface ReminderDeliveryEvent {
+  id: string;
+  reminderId: string;
+  userId: string;
+  channel: 'web' | 'telegram' | string;
+  provider?: string;
+  status: 'attempted' | 'sent' | 'failed' | 'skipped';
+  attempt: number;
+  detail?: string;
+  errorText?: string;
+  idempotencyKey?: string;
+  createdAt: string;
+}
+
 interface GitStatus {
   repository: string;
   branch: string;
@@ -152,6 +166,7 @@ const taskForm = reactive({
 });
 
 const reminders = ref<ReminderRecord[]>([]);
+const reminderDeliveryEvents = ref<Record<string, ReminderDeliveryEvent[]>>({});
 const reminderSaving = ref(false);
 const editingReminderId = ref<string | null>(null);
 const reminderForm = reactive({
@@ -196,6 +211,13 @@ const priorityLabels: Record<ReminderRecord['priority'], string> = {
   low: 'Низький',
   normal: 'Звичайний',
   high: 'Високий',
+};
+
+const deliveryEventLabels: Record<ReminderDeliveryEvent['status'], string> = {
+  attempted: 'Спроба',
+  sent: 'Відправлено',
+  failed: 'Помилка',
+  skipped: 'Пропущено',
 };
 
 const gitDeploymentLabels: Record<string, string> = {
@@ -401,7 +423,31 @@ async function loadTasks() {
 async function loadReminders() {
   const result = await apiFetch<{ reminders: ReminderRecord[] }>('/api/v1/reminders');
   reminders.value = result.reminders;
+  await loadReminderDeliveryEvents(result.reminders);
   markSynced();
+}
+
+async function loadReminderDeliveryEvents(reminderList: ReminderRecord[]) {
+  if (!reminderList.length) {
+    reminderDeliveryEvents.value = {};
+    return;
+  }
+  const results = await Promise.allSettled(
+    reminderList.map(async (reminder) => {
+      const result = await apiFetch<{ events: ReminderDeliveryEvent[] }>(
+        `/api/v1/reminders/${reminder.id}/delivery-events?limit=4`,
+      );
+      return [reminder.id, result.events] as const;
+    }),
+  );
+  const next: Record<string, ReminderDeliveryEvent[]> = {};
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const [reminderId, events] = result.value;
+      next[reminderId] = events;
+    }
+  }
+  reminderDeliveryEvents.value = next;
 }
 
 async function loadGitStatus() {
@@ -738,6 +784,19 @@ function usePrompt(prompt: string) {
 
 function deliveryMethodLabel(method: ReminderRecord['deliveryMethod']) {
   return method === 'telegram' ? 'Telegram' : 'Web';
+}
+
+function reminderEvents(reminder: ReminderRecord) {
+  return reminderDeliveryEvents.value[reminder.id] ?? [];
+}
+
+function deliveryEventMeta(event: ReminderDeliveryEvent) {
+  const provider = event.provider ? ` · ${event.provider}` : '';
+  return `${formatDate(event.createdAt)} · спроба ${event.attempt}${provider}`;
+}
+
+function deliveryEventDetail(event: ReminderDeliveryEvent) {
+  return event.detail || event.errorText || 'Без деталей.';
 }
 
 function workflowStatusLabel(run: GitWorkflowRun) {
@@ -1151,6 +1210,21 @@ function memoryKindLabel(kind: string) {
                 {{ formatDate(reminder.triggerAt) }} · {{ priorityLabels[reminder.priority] }} ·
                 {{ deliveryMethodLabel(reminder.deliveryMethod) }}
               </small>
+              <div v-if="reminderEvents(reminder).length" class="delivery-timeline">
+                <div
+                  v-for="event in reminderEvents(reminder)"
+                  :key="event.id"
+                  class="delivery-event"
+                  :data-status="event.status"
+                >
+                  <span>{{ deliveryEventLabels[event.status] ?? event.status }}</span>
+                  <small>{{ deliveryEventMeta(event) }}</small>
+                  <small>{{ deliveryEventDetail(event) }}</small>
+                </div>
+              </div>
+              <div v-else class="delivery-timeline empty">
+                Історія доставки зʼявиться після спрацювання.
+              </div>
             </div>
             <div class="record-actions">
               <button class="ghost-button" type="button" @click="editReminder(reminder)">

@@ -840,6 +840,54 @@ small {
   line-height: 1.35;
 }
 
+.delivery-timeline {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+}
+
+.delivery-timeline.empty {
+  border: 1px dashed rgba(148, 163, 184, 0.13);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--nova-dimmed);
+  font-size: 0.76rem;
+  padding: 0.7rem 0.8rem;
+}
+
+.delivery-event {
+  display: grid;
+  gap: 0.22rem;
+  border-left: 2px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 0.55rem 0.7rem;
+}
+
+.delivery-event span {
+  color: var(--nova-text-soft);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.delivery-event[data-status='attempted'] {
+  border-left-color: var(--nova-amber);
+}
+
+.delivery-event[data-status='sent'] {
+  border-left-color: var(--nova-green);
+}
+
+.delivery-event[data-status='failed'] {
+  border-left-color: var(--nova-red);
+}
+
+.delivery-event[data-status='skipped'] {
+  border-left-color: var(--nova-muted);
+}
+
 .record-actions {
   justify-content: flex-end;
 }
