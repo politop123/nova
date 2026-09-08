@@ -261,6 +261,36 @@ func TestDefaultReminderDeliveryMethodFallsBackToWebWithoutTelegramToken(t *test
 	}
 }
 
+func TestTelegramVoiceUploadMetadataPrefersTelegramMimeForOctetStream(t *testing.T) {
+	filename, contentType := telegramVoiceUploadMetadata(telegram.Message{
+		Voice: &telegram.Voice{
+			FileUniqueID: "voice-unique",
+			MimeType:     "audio/ogg",
+		},
+	}, telegram.VoiceDownload{
+		Filename:    "file_1.oga",
+		ContentType: "application/octet-stream",
+	})
+	if filename != "file_1.oga" || contentType != "audio/ogg" {
+		t.Fatalf("metadata = %q/%q, want file_1.oga/audio/ogg", filename, contentType)
+	}
+}
+
+func TestTelegramVoiceUploadMetadataKeepsSpecificDownloadMime(t *testing.T) {
+	filename, contentType := telegramVoiceUploadMetadata(telegram.Message{
+		Voice: &telegram.Voice{
+			FileUniqueID: "voice-unique",
+			MimeType:     "audio/ogg",
+		},
+	}, telegram.VoiceDownload{
+		Filename:    "audio.webm",
+		ContentType: "audio/webm",
+	})
+	if filename != "audio.webm" || contentType != "audio/webm" {
+		t.Fatalf("metadata = %q/%q, want audio.webm/audio/webm", filename, contentType)
+	}
+}
+
 func TestExtractCommitReference(t *testing.T) {
 	got := extractCommitReference("Чи задеплоївся commit ABCDEF123?")
 	if got != "abcdef123" {

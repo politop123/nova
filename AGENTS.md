@@ -7,6 +7,7 @@
 - Telegram must use the same server-side conversation, memory, policy, budget, and audit paths as Web. Do not build separate Telegram-only assistant behavior.
 - Telegram voice messages are first-class input: download them server-side, transcribe them, normalize the transcript into `NovaInput`, then answer through NOVA Core.
 - Telegram voice files may arrive with a `.oga`/Opus filename; normalize upload metadata to a supported `.ogg` filename and `audio/ogg` content type before sending audio to OpenAI transcription.
+- Telegram voice download responses may use generic `application/octet-stream`; prefer Telegram's declared voice MIME type when it is audio-specific, strip MIME parameters, and log voice metadata/dimensions on download or transcription failures without logging bot tokens.
 - Telegram webhook decoding must tolerate extra Bot API fields. Keep strict JSON validation for NOVA-owned APIs, but do not reject real Telegram updates because of unknown Telegram payload fields.
 - The Web dashboard should reflect the shared conversation state, including Telegram-originated messages, through lightweight refresh/polling and duplicate-safe message merging.
 - NOVA must be able to send proactive Telegram messages for reminders and important events after the user subscribes to the bot and the allowlist is configured.

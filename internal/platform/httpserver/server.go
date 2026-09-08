@@ -603,7 +603,7 @@ func (s *Server) telegramWebhook(w http.ResponseWriter, r *http.Request) {
 	text, modality, err := s.telegramMessageText(r.Context(), message)
 	if err != nil {
 		s.logger.Warn("telegram input could not be normalized", "message_id", message.MessageID, "error", err)
-		_ = s.telegram.SendMessage(r.Context(), message.Chat.ID, "Не змогла розібрати це повідомлення. Спробуй текстом або коротшим голосовим.")
+		_ = s.telegram.SendMessage(r.Context(), message.Chat.ID, "Не змогла розпізнати це голосове. Спробуй ще раз трохи чіткіше або напиши текстом.")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -681,10 +681,18 @@ func (s *Server) telegramMessageText(ctx context.Context, message telegram.Messa
 	}
 	download, err := s.telegram.DownloadVoice(ctx, message.Voice.FileID)
 	if err != nil {
+		args := telegramVoiceLogFields(message, nil, "", "")
+		args = append(args, "error", err)
+		s.logger.Warn("telegram voice download failed", args...)
 		return "", "", err
 	}
-	result, err := s.transcriber.TranscribeAudio(ctx, download.Data, download.Filename, download.ContentType, "uk")
+	uploadFilename, uploadContentType := telegramVoiceUploadMetadata(message, download)
+	s.logger.Info("telegram voice downloaded", telegramVoiceLogFields(message, &download, uploadFilename, uploadContentType)...)
+	result, err := s.transcriber.TranscribeAudio(ctx, download.Data, uploadFilename, uploadContentType, "uk")
 	if err != nil {
+		args := telegramVoiceLogFields(message, &download, uploadFilename, uploadContentType)
+		args = append(args, "error", err)
+		s.logger.Warn("telegram voice transcription failed", args...)
 		return "", "", err
 	}
 	transcript := strings.TrimSpace(result.Text)
@@ -719,6 +727,56 @@ func (s *Server) telegramMessageText(ctx context.Context, message telegram.Messa
 		return "", "", err
 	}
 	return transcript, core.ModalityVoice, nil
+}
+
+func telegramVoiceUploadMetadata(message telegram.Message, download telegram.VoiceDownload) (string, string) {
+	filename := strings.TrimSpace(download.Filename)
+	contentType := strings.TrimSpace(download.ContentType)
+	if message.Voice == nil {
+		return filename, contentType
+	}
+	telegramMimeType := strings.TrimSpace(message.Voice.MimeType)
+	if shouldPreferTelegramVoiceMime(contentType, telegramMimeType) {
+		contentType = telegramMimeType
+	}
+	if filename == "" {
+		filename = "telegram-voice-" + strings.TrimSpace(message.Voice.FileUniqueID)
+	}
+	return filename, contentType
+}
+
+func shouldPreferTelegramVoiceMime(downloadContentType, telegramMimeType string) bool {
+	telegramMimeType = strings.ToLower(strings.TrimSpace(telegramMimeType))
+	if !strings.HasPrefix(telegramMimeType, "audio/") {
+		return false
+	}
+	downloadContentType = strings.ToLower(strings.TrimSpace(downloadContentType))
+	if before, _, ok := strings.Cut(downloadContentType, ";"); ok {
+		downloadContentType = strings.TrimSpace(before)
+	}
+	return downloadContentType == "" || downloadContentType == "application/octet-stream" || downloadContentType == "binary/octet-stream"
+}
+
+func telegramVoiceLogFields(message telegram.Message, download *telegram.VoiceDownload, uploadFilename, uploadContentType string) []any {
+	fields := []any{"telegram_message_id", message.MessageID, "telegram_chat_id", message.Chat.ID}
+	if message.Voice != nil {
+		fields = append(fields,
+			"voice_unique_id", message.Voice.FileUniqueID,
+			"voice_duration_seconds", message.Voice.Duration,
+			"voice_mime_type", message.Voice.MimeType,
+			"voice_file_size", message.Voice.FileSize,
+		)
+	}
+	if download != nil {
+		fields = append(fields,
+			"download_filename", download.Filename,
+			"download_content_type", download.ContentType,
+			"download_bytes", len(download.Data),
+			"upload_filename", uploadFilename,
+			"upload_content_type", uploadContentType,
+		)
+	}
+	return fields
 }
 
 func telegramServiceErrorText(err *serviceError) string {

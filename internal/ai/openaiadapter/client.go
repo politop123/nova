@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -268,21 +269,110 @@ func (c *Client) TranscribeAudio(ctx context.Context, audio []byte, filename, co
 }
 
 func normalizeTranscriptionUploadMetadata(filename, contentType string) (string, string) {
-	filename = strings.TrimSpace(filename)
+	filename = strings.ReplaceAll(strings.TrimSpace(filename), "\\", "/")
+	filename = path.Base(filename)
+	if filename == "." || filename == "/" {
+		filename = ""
+	}
 	contentType = strings.TrimSpace(contentType)
 	if filename == "" {
 		filename = "telegram-voice.ogg"
 	}
+	contentType = normalizeTranscriptionContentType(contentType)
+
+	extension := strings.ToLower(path.Ext(filename))
+	if extension == ".oga" || extension == ".opus" {
+		filename = filename[:len(filename)-len(path.Ext(filename))] + ".ogg"
+		extension = ".ogg"
+		contentType = "audio/ogg"
+	}
+
+	if !supportedTranscriptionExtension(extension) {
+		if inferred := transcriptionExtensionForContentType(contentType); inferred != "" {
+			if extension == "" {
+				filename += inferred
+			} else {
+				filename = filename[:len(filename)-len(path.Ext(filename))] + inferred
+			}
+			extension = inferred
+		}
+	}
+
+	if !supportedTranscriptionExtension(extension) {
+		filename = strings.TrimSuffix(filename, path.Ext(filename)) + ".ogg"
+		extension = ".ogg"
+	}
+	if !supportedTranscriptionContentType(contentType) {
+		contentType = transcriptionContentTypeForExtension(extension)
+	}
 	if contentType == "" {
 		contentType = "audio/ogg"
 	}
-	lowerFilename := strings.ToLower(filename)
-	for _, extension := range []string{".oga", ".opus"} {
-		if strings.HasSuffix(lowerFilename, extension) {
-			filename = filename[:len(filename)-len(extension)] + ".ogg"
-			contentType = "audio/ogg"
-			break
-		}
-	}
+
 	return filename, contentType
+}
+
+func normalizeTranscriptionContentType(contentType string) string {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if before, _, ok := strings.Cut(contentType, ";"); ok {
+		contentType = strings.TrimSpace(before)
+	}
+	switch contentType {
+	case "", "application/octet-stream", "binary/octet-stream":
+		return ""
+	case "application/ogg", "audio/x-ogg", "audio/opus", "audio/x-opus+ogg":
+		return "audio/ogg"
+	case "audio/mp3":
+		return "audio/mpeg"
+	case "audio/wave", "audio/x-wav":
+		return "audio/wav"
+	default:
+		return contentType
+	}
+}
+
+func supportedTranscriptionExtension(extension string) bool {
+	return transcriptionContentTypeForExtension(extension) != ""
+}
+
+func supportedTranscriptionContentType(contentType string) bool {
+	return transcriptionExtensionForContentType(contentType) != ""
+}
+
+func transcriptionContentTypeForExtension(extension string) string {
+	switch strings.ToLower(extension) {
+	case ".flac":
+		return "audio/flac"
+	case ".m4a", ".mp4":
+		return "audio/mp4"
+	case ".mp3", ".mpeg", ".mpga":
+		return "audio/mpeg"
+	case ".ogg":
+		return "audio/ogg"
+	case ".wav":
+		return "audio/wav"
+	case ".webm":
+		return "audio/webm"
+	default:
+		return ""
+	}
+}
+
+func transcriptionExtensionForContentType(contentType string) string {
+	switch normalizeTranscriptionContentType(contentType) {
+	case "audio/flac":
+		return ".flac"
+	case "audio/mp4", "video/mp4":
+		return ".m4a"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/wav":
+		return ".wav"
+	case "audio/webm", "video/webm":
+		return ".webm"
+	default:
+		return ""
+	}
 }
