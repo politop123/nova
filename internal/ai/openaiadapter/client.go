@@ -142,6 +142,8 @@ func actionPlanSchema() map[string]any {
 					core.IntentMemorySave,
 					core.IntentTaskCreate,
 					core.IntentReminderCreate,
+					core.IntentGitStatus,
+					core.IntentSystemStatus,
 				},
 			},
 			"confidence": map[string]any{
@@ -232,12 +234,13 @@ func (c *Client) TranscribeAudio(ctx context.Context, audio []byte, filename, co
 	}
 	filename = strings.TrimSpace(filename)
 	if filename == "" {
-		filename = "telegram-voice.oga"
+		filename = "telegram-voice.ogg"
 	}
 	contentType = strings.TrimSpace(contentType)
 	if contentType == "" {
 		contentType = "audio/ogg"
 	}
+	filename, contentType = normalizeTranscriptionUploadMetadata(filename, contentType)
 	language = strings.TrimSpace(language)
 	if language == "" {
 		language = "uk"
@@ -262,4 +265,24 @@ func (c *Client) TranscribeAudio(ctx context.Context, audio []byte, filename, co
 			OutputTokens: int(response.Usage.OutputTokens),
 		},
 	}, nil
+}
+
+func normalizeTranscriptionUploadMetadata(filename, contentType string) (string, string) {
+	filename = strings.TrimSpace(filename)
+	contentType = strings.TrimSpace(contentType)
+	if filename == "" {
+		filename = "telegram-voice.ogg"
+	}
+	if contentType == "" {
+		contentType = "audio/ogg"
+	}
+	lowerFilename := strings.ToLower(filename)
+	for _, extension := range []string{".oga", ".opus"} {
+		if strings.HasSuffix(lowerFilename, extension) {
+			filename = filename[:len(filename)-len(extension)] + ".ogg"
+			contentType = "audio/ogg"
+			break
+		}
+	}
+	return filename, contentType
 }
