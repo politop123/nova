@@ -13,4 +13,5 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldfl
 FROM --platform=$TARGETPLATFORM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/nova /nova
 COPY infrastructure/postgres/init.sql /schema/init.sql
+COPY infrastructure/postgres/migrations /schema/migrations
 ENTRYPOINT ["/nova"]

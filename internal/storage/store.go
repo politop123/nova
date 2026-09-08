@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -144,6 +145,16 @@ type UsageEvent struct {
 	CreatedAt         time.Time
 }
 
+type ServiceHeartbeat struct {
+	ServiceName string            `json:"serviceName"`
+	InstanceID  string            `json:"instanceId"`
+	Status      string            `json:"status"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	StartedAt   time.Time         `json:"startedAt"`
+	LastSeenAt  time.Time         `json:"lastSeenAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
+}
+
 func (s *Store) EnsureUser(ctx context.Context, userID string) error {
 	if s == nil || s.db == nil {
 		return errors.New("database is not configured")
@@ -165,6 +176,90 @@ func (s *Store) EnsureUser(ctx context.Context, userID string) error {
 		return fmt.Errorf("ensure user profile: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) UpsertServiceHeartbeat(ctx context.Context, heartbeat ServiceHeartbeat) error {
+	if s == nil || s.db == nil {
+		return errors.New("database is not configured")
+	}
+	heartbeat.ServiceName = strings.TrimSpace(heartbeat.ServiceName)
+	heartbeat.InstanceID = strings.TrimSpace(heartbeat.InstanceID)
+	heartbeat.Status = strings.TrimSpace(heartbeat.Status)
+	if heartbeat.ServiceName == "" {
+		return errors.New("heartbeat serviceName is required")
+	}
+	if heartbeat.InstanceID == "" {
+		return errors.New("heartbeat instanceId is required")
+	}
+	if heartbeat.Status == "" {
+		heartbeat.Status = "ok"
+	}
+	metadata := heartbeat.Metadata
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("encode heartbeat metadata: %w", err)
+	}
+	var startedAt any
+	if !heartbeat.StartedAt.IsZero() {
+		startedAt = heartbeat.StartedAt.UTC()
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO service_heartbeats (
+			service_name, instance_id, status, metadata_json, started_at, last_seen_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4::jsonb, COALESCE($5::timestamptz, now()), now(), now())
+		ON CONFLICT (service_name, instance_id) DO UPDATE
+		SET status = EXCLUDED.status,
+			metadata_json = EXCLUDED.metadata_json,
+			last_seen_at = now(),
+			updated_at = now()
+	`, heartbeat.ServiceName, heartbeat.InstanceID, heartbeat.Status, string(metadataJSON), startedAt)
+	if err != nil {
+		return fmt.Errorf("upsert service heartbeat: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) LatestServiceHeartbeat(ctx context.Context, serviceName string) (ServiceHeartbeat, error) {
+	if s == nil || s.db == nil {
+		return ServiceHeartbeat{}, errors.New("database is not configured")
+	}
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return ServiceHeartbeat{}, errors.New("heartbeat serviceName is required")
+	}
+	var result ServiceHeartbeat
+	var metadataJSON []byte
+	err := s.db.QueryRow(ctx, `
+		SELECT service_name, instance_id, status, metadata_json, started_at, last_seen_at, updated_at
+		FROM service_heartbeats
+		WHERE service_name = $1
+		ORDER BY last_seen_at DESC
+		LIMIT 1
+	`, serviceName).Scan(
+		&result.ServiceName,
+		&result.InstanceID,
+		&result.Status,
+		&metadataJSON,
+		&result.StartedAt,
+		&result.LastSeenAt,
+		&result.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ServiceHeartbeat{}, ErrNotFound
+	}
+	if err != nil {
+		return ServiceHeartbeat{}, fmt.Errorf("latest service heartbeat: %w", err)
+	}
+	if len(metadataJSON) > 0 {
+		if err := json.Unmarshal(metadataJSON, &result.Metadata); err != nil {
+			return ServiceHeartbeat{}, fmt.Errorf("decode heartbeat metadata: %w", err)
+		}
+	}
+	return result, nil
 }
 
 func (s *Store) CreateConversation(ctx context.Context, userID, title string) (Conversation, error) {

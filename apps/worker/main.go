@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,6 +40,18 @@ func main() {
 		os.Exit(1)
 	}
 	store := storage.New(db)
+	heartbeatStop := jobs.StartHeartbeat(context.Background(), logger, store, jobs.HeartbeatConfig{
+		ServiceName: jobs.ServiceWorker,
+		InstanceID:  WorkerInstanceID(),
+		Metadata: map[string]string{
+			"role":      "asynq",
+			"imageTag":  cfg.GitDeployedCommitSHA,
+			"timezone":  cfg.Timezone,
+			"redisAddr": redisAddr,
+		},
+		Interval: 15 * time.Second,
+	})
+	defer heartbeatStop()
 
 	var telegramClient *telegram.Client
 	telegramChatID, hasTelegramChatID := cfg.TelegramNotificationChatID()
@@ -64,6 +79,14 @@ func main() {
 		logger.Error("worker stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func WorkerInstanceID() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "unknown-host"
+	}
+	return fmt.Sprintf("%s:%s", hostname, strconv.Itoa(os.Getpid()))
 }
 
 type slogAsynqLogger struct{ logger *slog.Logger }

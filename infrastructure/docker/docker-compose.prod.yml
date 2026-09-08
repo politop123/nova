@@ -68,7 +68,7 @@ services:
     profiles: ['migration']
     <<: *image-pull-policy
     environment: *backend-environment
-    command: ['-schema', '/schema/init.sql']
+    command: ['-schema', '/schema/init.sql', '-migrations', '/schema/migrations']
     depends_on:
       postgres:
         condition: service_healthy

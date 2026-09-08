@@ -113,6 +113,8 @@ interface OperationalStatusCheck {
   label: string;
   status: 'ok' | 'degraded' | 'not_configured' | string;
   detail?: string;
+  lastSeenAt?: string;
+  ageSeconds?: number;
 }
 
 const apiState = ref<ApiState>('checking');
@@ -315,7 +317,6 @@ async function bootstrapApp() {
       loadTasks(),
       loadReminders(),
       loadOperationalStatus(),
-      loadGitStatus(),
     ]);
     startMessagePolling();
     markSynced();
@@ -424,6 +425,9 @@ async function loadOperationalStatus() {
     if (operationalStatus.value.git) {
       gitStatus.value = operationalStatus.value.git;
       gitStatusError.value = '';
+    } else {
+      gitStatus.value = null;
+      gitStatusError.value = operationalStatus.value.checks.git?.detail ?? '';
     }
   } catch (error: any) {
     operationalStatus.value = null;

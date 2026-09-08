@@ -11,6 +11,7 @@ import (
 	"nova.local/core/internal/integrations/githubstatus"
 	"nova.local/core/internal/integrations/telegram"
 	"nova.local/core/internal/platform/config"
+	"nova.local/core/internal/storage"
 )
 
 func TestParseOptionalZonedTimeLocalKyiv(t *testing.T) {
@@ -332,5 +333,37 @@ func TestFormatSystemStatusAssistantText(t *testing.T) {
 	}
 	if !strings.Contains(got, "Потребує уваги") {
 		t.Fatalf("expected attention summary, got %q", got)
+	}
+}
+
+func TestWorkerHeartbeatCheckFresh(t *testing.T) {
+	now := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	check := workerHeartbeatCheck(storage.ServiceHeartbeat{
+		ServiceName: "worker",
+		InstanceID:  "worker-1",
+		Status:      "ok",
+		LastSeenAt:  now.Add(-12 * time.Second),
+	}, now)
+	if check.Status != checkStatusOK {
+		t.Fatalf("fresh heartbeat status = %q, want ok", check.Status)
+	}
+	if check.AgeSeconds != 12 || !strings.Contains(check.Detail, "12 сек") {
+		t.Fatalf("unexpected fresh heartbeat check: %#v", check)
+	}
+}
+
+func TestWorkerHeartbeatCheckStale(t *testing.T) {
+	now := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	check := workerHeartbeatCheck(storage.ServiceHeartbeat{
+		ServiceName: "worker",
+		InstanceID:  "worker-1",
+		Status:      "ok",
+		LastSeenAt:  now.Add(-2 * time.Minute),
+	}, now)
+	if check.Status != checkStatusDegraded {
+		t.Fatalf("stale heartbeat status = %q, want degraded", check.Status)
+	}
+	if !strings.Contains(check.Detail, "застарів") {
+		t.Fatalf("expected stale detail, got %q", check.Detail)
 	}
 }

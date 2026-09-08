@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,12 +10,15 @@ import (
 
 	"github.com/hibiken/asynq"
 	"nova.local/core/internal/integrations/githubstatus"
+	"nova.local/core/internal/jobs"
+	"nova.local/core/internal/storage"
 )
 
 const (
-	checkStatusOK            = "ok"
-	checkStatusDegraded      = "degraded"
-	checkStatusNotConfigured = "not_configured"
+	checkStatusOK             = "ok"
+	checkStatusDegraded       = "degraded"
+	checkStatusNotConfigured  = "not_configured"
+	workerHeartbeatStaleAfter = 90 * time.Second
 )
 
 type operationalStatusResponse struct {
@@ -27,9 +31,11 @@ type operationalStatusResponse struct {
 }
 
 type operationalStatusCheck struct {
-	Label  string `json:"label"`
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
+	Label      string `json:"label"`
+	Status     string `json:"status"`
+	Detail     string `json:"detail,omitempty"`
+	LastSeenAt string `json:"lastSeenAt,omitempty"`
+	AgeSeconds int64  `json:"ageSeconds,omitempty"`
 }
 
 func (s *Server) getOperationalStatus(w http.ResponseWriter, r *http.Request) {
@@ -81,19 +87,9 @@ func (s *Server) buildOperationalStatus(ctx context.Context, userID string) oper
 		addCheck("reminderQueue", "Черга нагадувань", checkStatusOK, "Черга прийому задач доступна.")
 	}
 
-	if s.redis == nil {
-		addCheck("worker", "Worker", checkStatusNotConfigured, "Worker не можна перевірити без Redis.")
-	} else if !redisOK {
-		addCheck("worker", "Worker", checkStatusDegraded, "Worker не можна перевірити, бо Redis недоступний.")
-	} else {
-		servers, err := asynq.NewInspectorFromRedisClient(s.redis).Servers()
-		if err != nil {
-			addCheck("worker", "Worker", checkStatusDegraded, "Не вдалося прочитати стан worker.")
-		} else if len(servers) == 0 {
-			addCheck("worker", "Worker", checkStatusDegraded, "У Redis не видно активного worker.")
-		} else {
-			addCheck("worker", "Worker", checkStatusOK, fmt.Sprintf("Активних worker-серверів: %d.", len(servers)))
-		}
+	response.Checks["worker"] = s.workerStatusCheck(ctx, redisOK, time.Now().UTC())
+	if response.Checks["worker"].Status != checkStatusOK {
+		response.Status = checkStatusDegraded
 	}
 
 	if s.store == nil {
@@ -195,6 +191,103 @@ func formatSystemStatusAssistantText(status operationalStatusResponse) string {
 		lines = append(lines, "Потребує уваги: "+strings.Join(attention, "; ")+".")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *Server) workerStatusCheck(ctx context.Context, redisOK bool, now time.Time) operationalStatusCheck {
+	if s.store != nil {
+		heartbeat, err := s.store.LatestServiceHeartbeat(ctx, jobs.ServiceWorker)
+		if err == nil {
+			return workerHeartbeatCheck(heartbeat, now)
+		}
+		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return operationalStatusCheck{
+				Label:  "Worker",
+				Status: checkStatusDegraded,
+				Detail: "Не вдалося прочитати worker heartbeat.",
+			}
+		}
+	}
+	return s.workerQueueVisibilityCheck(redisOK)
+}
+
+func workerHeartbeatCheck(heartbeat storage.ServiceHeartbeat, now time.Time) operationalStatusCheck {
+	age := now.Sub(heartbeat.LastSeenAt)
+	if age < 0 {
+		age = 0
+	}
+	status := checkStatusOK
+	detail := fmt.Sprintf("Останній heartbeat %s тому.", humanDuration(age))
+	if heartbeat.InstanceID != "" {
+		detail += " Instance: " + heartbeat.InstanceID + "."
+	}
+	if heartbeat.Status != "" && heartbeat.Status != checkStatusOK {
+		status = checkStatusDegraded
+		detail = "Worker відмітив статус `" + heartbeat.Status + "`. " + detail
+	}
+	if age > workerHeartbeatStaleAfter {
+		status = checkStatusDegraded
+		detail = fmt.Sprintf("Останній heartbeat %s тому — сигнал застарів.", humanDuration(age))
+	}
+	return operationalStatusCheck{
+		Label:      "Worker",
+		Status:     status,
+		Detail:     detail,
+		LastSeenAt: heartbeat.LastSeenAt.UTC().Format(time.RFC3339),
+		AgeSeconds: int64(age.Seconds()),
+	}
+}
+
+func (s *Server) workerQueueVisibilityCheck(redisOK bool) operationalStatusCheck {
+	if s.redis == nil {
+		return operationalStatusCheck{
+			Label:  "Worker",
+			Status: checkStatusNotConfigured,
+			Detail: "Worker не можна перевірити без Redis.",
+		}
+	}
+	if !redisOK {
+		return operationalStatusCheck{
+			Label:  "Worker",
+			Status: checkStatusDegraded,
+			Detail: "Worker не можна перевірити, бо Redis недоступний.",
+		}
+	}
+	servers, err := asynq.NewInspectorFromRedisClient(s.redis).Servers()
+	if err != nil {
+		return operationalStatusCheck{
+			Label:  "Worker",
+			Status: checkStatusDegraded,
+			Detail: "Не вдалося прочитати стан worker.",
+		}
+	}
+	if len(servers) == 0 {
+		return operationalStatusCheck{
+			Label:  "Worker",
+			Status: checkStatusDegraded,
+			Detail: "У Redis не видно активного worker, і heartbeat ще не записувався.",
+		}
+	}
+	return operationalStatusCheck{
+		Label:  "Worker",
+		Status: checkStatusDegraded,
+		Detail: fmt.Sprintf("Worker видно в Redis (%d), але heartbeat ще не записувався.", len(servers)),
+	}
+}
+
+func humanDuration(duration time.Duration) string {
+	switch {
+	case duration < time.Second:
+		return "щойно"
+	case duration < time.Minute:
+		seconds := int(duration.Round(time.Second) / time.Second)
+		return fmt.Sprintf("%d сек", seconds)
+	case duration < time.Hour:
+		minutes := int(duration.Round(time.Minute) / time.Minute)
+		return fmt.Sprintf("%d хв", minutes)
+	default:
+		hours := int(duration.Round(time.Hour) / time.Hour)
+		return fmt.Sprintf("%d год", hours)
+	}
 }
 
 func humanCheckStatus(check operationalStatusCheck) string {

@@ -131,7 +131,7 @@ cd /opt/nova
 ./deploy-prod.sh <commit-sha>
 ```
 
-The script pulls the four images, waits for PostgreSQL and Redis, applies the idempotent schema, starts the app services, checks `/health`, and prunes only old unused images. It never removes named data volumes.
+The script pulls the four images, waits for PostgreSQL and Redis, applies the idempotent schema plus additive migrations, starts the app services, checks `/health`, and prunes only old unused images. It never removes named data volumes.
 
 To roll back, run the same command with the previous successful commit SHA. Keep schema changes backward-compatible before rolling back an application image.
 

@@ -619,6 +619,14 @@ components:
         label: { type: string, example: Telegram }
         status: { type: string, enum: [ok, degraded, not_configured] }
         detail: { type: string }
+        lastSeenAt:
+          type: string
+          format: date-time
+          description: Latest heartbeat timestamp when the component reports one.
+        ageSeconds:
+          type: integer
+          minimum: 0
+          description: Age of the latest heartbeat in seconds.
     GitStatus:
       type: object
       required: [repository, branch, latestCommit, deployedCommit, deployment, checkedAt]
