@@ -58,6 +58,8 @@ New private Telegram reminders also have **Виконано**, **Через 10 �
 
 ## Quality checks
 
+Tasks can be managed through the same Web/Telegram conversation: “Познач задачу про рахунок виконаною”, “Скасуй задачу про паспорт”, or “Перенеси дедлайн задачі про паспорт на завтра о 10:00”. The planner can also interpret a clear completion report against a bounded preview of actual open tasks. Go checks ownership, exact whole-word subject matching, uniqueness and the current task version before changing anything. If titles repeat, specify the original deadline; identical undated tasks require the Web controls. A deadline change updates the task only, not any separate reminder. Done/cancelled tasks stay in history. Web reloads tasks after chat changes and new Telegram replies.
+
 ```bash
 go test ./...
 go vet ./...
@@ -68,7 +70,7 @@ pnpm build
 pnpm format:check
 ```
 
-Storage integration tests run against a disposable PostgreSQL/pgvector database when `NOVA_TEST_DATABASE_URL` is set: `go test -race ./internal/storage -count=1`. Reminder callback integration is covered by `go test -race ./internal/platform/httpserver -run TestTelegramReminderCallbackWebhookIntegration -count=1`. Never point these tests at a production database; they install schemas and temporary test constraints.
+Storage integration tests run against a disposable PostgreSQL/pgvector database when `NOVA_TEST_DATABASE_URL` is set: `go test -race ./internal/storage -count=1`. Channel integration is covered by `go test -race ./internal/platform/httpserver -count=1`, including task mutations over Web JSON, SSE, Telegram and reminder callbacks. These use fake model/provider responses, not paid API calls or live NLP evaluation. Never point these tests at a production database; they install schemas and temporary test constraints.
 
 Reminder queue submissions are durable in PostgreSQL. The worker automatically retries submission after Redis outages and recovers missing, unattempted queue jobs. Cancelled and moved reminders invalidate old work. Deliveries more than 24 hours overdue, exhausted queue retries, or missing jobs that may already have sent a message are marked for review instead of replayed. Ask “Скажи свій статус” to see delayed/failed reminders; move a failed reminder to a new future time to try again.
 

@@ -51,7 +51,7 @@ Exit: NOVA answers a question using an old fact without sending the full history
 2. Enforce READ, WRITE, and CONFIRM policy before execution.
 3. Add idempotency for repeatable write operations.
 4. Record proposed, confirmed, executed, failed, and cancelled actions. **Foundation done:** planner-executed memory, task, and reminder actions write `agent_actions` audit records with hashes and idempotency keys.
-5. Implement initial tools: memory search/save, task create/complete, reminder create/update/delete, notification send, and conversation search.
+5. Implement initial tools: memory search/save, task create/complete, reminder create/update/delete, notification send, and conversation search. **Task management done:** the shared planner can complete/cancel open tasks or move deadlines, with conservative matching, explicit ambiguity handling, version checks and atomic audit receipts. Task changes leave separate reminders unchanged.
 
 Exit: no CONFIRM action runs without a short-lived explicit approval tied to the exact action payload.
 
@@ -63,6 +63,7 @@ Exit: no CONFIRM action runs without a short-lived explicit approval tied to the
 4. Add retries, dead-letter handling, cancellation, and idempotent delivery. **Recovery implemented:** Asynq retries deliveries; a PostgreSQL-backed dispatcher recovers queue submissions after outages, leases work across restarts, and skips cancelled/stale jobs. Each delivery attempt is reserved once. Archived, uncertain, and over-24-hour-old deliveries require review instead of automatic replay. Exactly-once external delivery remains limited by provider/database crash windows.
 5. Record notification and delivery status. **Done:** delivery writes to `notifications`, `reminder_delivery_events`, and reminder state; operational status includes delayed, pending-dispatch, and terminally failed reminders.
 6. Manage reminders from Telegram/Web using natural language. **Done:** shared agenda queries, cancellation, and rescheduling with ambiguous-match clarification and timezone-aware dates.
+7. Manage open tasks from Telegram/Web using natural language. **Done:** completion, cancellation and future deadline changes. Bounded real-task previews help the planner interpret completion reports; Go authorizes and validates each mutation. The Web dashboard refreshes shared task state after channel replies. Live model phrasing quality still requires ongoing evaluation.
 
 Exit: create, edit, cancel, and receive a reminder reliably across restarts.
 

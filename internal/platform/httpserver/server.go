@@ -223,6 +223,7 @@ type createMessageResponse struct {
 	Usage        *core.NovaUsage      `json:"usage,omitempty"`
 	Memory       *storage.Memory      `json:"createdMemory,omitempty"`
 	Task         *storage.Task        `json:"createdTask,omitempty"`
+	RefreshTasks bool                 `json:"refreshTasks,omitempty"`
 	Reminder     *storage.Reminder    `json:"createdReminder,omitempty"`
 }
 
@@ -1331,6 +1332,7 @@ func (s *Server) completeTextMessage(ctx context.Context, userID, conversationID
 		Usage:        modelUsage,
 		Memory:       createdMemory,
 		Task:         createdTask,
+		RefreshTasks: planned.RefreshTasks,
 		Reminder:     createdReminder,
 	}, nil
 }
@@ -1575,6 +1577,7 @@ func (s *Server) streamMessage(w http.ResponseWriter, r *http.Request) {
 		Usage:        modelUsage,
 		Memory:       createdMemory,
 		Task:         createdTask,
+		RefreshTasks: planned.RefreshTasks,
 		Reminder:     createdReminder,
 	})
 }

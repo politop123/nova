@@ -11,6 +11,9 @@ func TestReminderManagementRoutes(t *testing.T) {
 		"Скасуй нагадування про паспорт":             "reminder.cancel",
 		"Перенеси нагадування про паспорт на завтра": "reminder.reschedule",
 		"Нагадай завтра купити хліб":                 "reminder.create",
+		"Познач задачу про рахунок виконаною":        "task.complete",
+		"Скасуй задачу про паспорт":                  "task.cancel",
+		"Перенеси дедлайн задачі на завтра":          "task.reschedule",
 	} {
 		if got := DetectDeterministicIntent(text); got != want {
 			t.Errorf("%q: %q want %q", text, got, want)

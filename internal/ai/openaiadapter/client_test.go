@@ -1,6 +1,7 @@
 package openaiadapter
 
 import (
+	"slices"
 	"testing"
 
 	"nova.local/core/internal/core"
@@ -13,6 +14,25 @@ func TestNormalizeTranscriptionUploadMetadataRenamesTelegramOGA(t *testing.T) {
 	}
 	if contentType != "audio/ogg" {
 		t.Fatalf("contentType = %q, want audio/ogg", contentType)
+	}
+}
+
+func TestActionSchemaAndNormalizationSupportTaskChanges(t *testing.T) {
+	schema := actionPlanSchema()
+	props := schema["properties"].(map[string]any)
+	intents := props["intent"].(map[string]any)["enum"].([]string)
+	item := props["actions"].(map[string]any)["items"].(map[string]any)
+	actions := item["properties"].(map[string]any)["type"].(map[string]any)["enum"].([]string)
+	for _, action := range []string{core.ActionTaskComplete, core.ActionTaskCancel, core.ActionTaskReschedule} {
+		if !slices.Contains(intents, action) || !slices.Contains(actions, action) {
+			t.Fatalf("missing schema action: %s", action)
+		}
+	}
+	if schema["additionalProperties"] != false || item["additionalProperties"] != false {
+		t.Fatal("schema no longer strict")
+	}
+	if len(item["required"].([]string)) != len(item["properties"].(map[string]any)) {
+		t.Fatal("strict schema has optional fields")
 	}
 }
 

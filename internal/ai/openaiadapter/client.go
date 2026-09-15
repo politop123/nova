@@ -144,6 +144,9 @@ func actionPlanSchema() map[string]any {
 					core.IntentUnknown,
 					core.IntentMemorySave,
 					core.IntentTaskCreate,
+					core.IntentTaskComplete,
+					core.IntentTaskCancel,
+					core.IntentTaskReschedule,
 					core.IntentReminderCreate,
 					core.IntentReminderCancel,
 					core.IntentReminderReschedule,
@@ -169,7 +172,7 @@ func actionPlanSchema() map[string]any {
 					"properties": map[string]any{
 						"type": map[string]any{
 							"type": "string",
-							"enum": []string{core.ActionMemorySave, core.ActionTaskCreate, core.ActionReminderCreate, core.ActionReminderCancel, core.ActionReminderReschedule},
+							"enum": []string{core.ActionMemorySave, core.ActionTaskCreate, core.ActionTaskComplete, core.ActionTaskCancel, core.ActionTaskReschedule, core.ActionReminderCreate, core.ActionReminderCancel, core.ActionReminderReschedule},
 						},
 						"title":          map[string]any{"type": "string"},
 						"details":        map[string]any{"type": "string"},

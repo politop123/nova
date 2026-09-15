@@ -42,6 +42,8 @@ func (s *Server) reminderManagementFallback(ctx context.Context, userID, text, i
 		result.AssistantText = s.agendaAssistantText(ctx, userID, date)
 	case core.IntentReminderCancel, core.IntentReminderReschedule:
 		result.AssistantText = "Зараз не вдалося розібрати запит на зміну нагадування. Спробуй ще раз або зміни його у вебпанелі."
+	case core.IntentTaskComplete, core.IntentTaskCancel, core.IntentTaskReschedule:
+		result.AssistantText = "Зараз не вдалося розібрати запит на зміну задачі. Нічого не змінювала. Спробуй ще раз або скористайся вебпанеллю."
 	default:
 		return plannedActionResult{}
 	}

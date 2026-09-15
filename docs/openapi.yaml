@@ -553,7 +553,8 @@ components:
             intent:
               type: string
               description: >-
-                Includes agenda.list, reminder.create, reminder.cancel, and reminder.reschedule.
+                Includes agenda.list, task.create, task.complete, task.cancel, task.reschedule,
+                reminder.create, reminder.cancel, and reminder.reschedule.
                 Reminder changes refresh the existing reminder list; they do not return createdReminder.
             tier: { type: string, enum: [simple, medium, strong] }
             model: { type: string }
@@ -563,6 +564,13 @@ components:
           $ref: '#/components/schemas/Memory'
         createdTask:
           $ref: '#/components/schemas/Task'
+        refreshTasks:
+          type: boolean
+          description: >-
+            Client should reload tasks after an existing-task mutation attempt, including
+            mixed-intent plans. A reload hint, not proof of successful execution;
+            assistantMessage contains the validated result or clarification. Task changes
+            do not return createdTask. Also included in the SSE done event.
         createdReminder:
           $ref: '#/components/schemas/Reminder'
     NovaUsage:

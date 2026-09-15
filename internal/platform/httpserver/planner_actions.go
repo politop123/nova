@@ -26,6 +26,7 @@ type plannedActionResult struct {
 	Usage           *core.NovaUsage
 	CreatedMemory   *storage.Memory
 	CreatedTask     *storage.Task
+	RefreshTasks    bool
 	CreatedReminder *storage.Reminder
 }
 
@@ -33,6 +34,7 @@ type executedActionSet struct {
 	replies         []string
 	createdMemory   *storage.Memory
 	createdTask     *storage.Task
+	refreshTasks    bool
 	createdReminder *storage.Reminder
 }
 
@@ -155,7 +157,7 @@ func (s *Server) planAndMaybeExecuteActions(
 	}
 	if plan.Confidence < plannerMinimumActionConfidence {
 		reply := strings.TrimSpace(plan.Reply)
-		if plan.Intent == core.IntentReminderCancel || plan.Intent == core.IntentReminderReschedule {
+		if isMutationIntent(plan.Intent) {
 			reply = clarificationForIntent(plan.Intent)
 		}
 		if reply == "" {
@@ -174,7 +176,7 @@ func (s *Server) planAndMaybeExecuteActions(
 	}
 	if len(plan.Actions) == 0 {
 		reply := strings.TrimSpace(plan.Reply)
-		if plan.Intent == core.IntentReminderCancel || plan.Intent == core.IntentReminderReschedule {
+		if isMutationIntent(plan.Intent) {
 			reply = clarificationForIntent(plan.Intent)
 		}
 		if reply == "" {
@@ -205,6 +207,7 @@ func (s *Server) planAndMaybeExecuteActions(
 		Usage:           &plannerUsage,
 		CreatedMemory:   executed.createdMemory,
 		CreatedTask:     executed.createdTask,
+		RefreshTasks:    executed.refreshTasks,
 		CreatedReminder: executed.createdReminder,
 	}, nil
 }
@@ -222,6 +225,11 @@ func (s *Server) buildActionPlannerInput(ctx context.Context, userID, conversati
 		}
 		recent = append(recent, agent.PlannerMessage{Role: message.Role, Content: content})
 	}
+	tasks, err := s.store.ListTasks(ctx, userID, "open", 21)
+	if err != nil {
+		return "", err
+	}
+	preview, truncated := plannerTaskPreview(tasks)
 	return agent.BuildPlannerInput(agent.PlannerInput{
 		CurrentTime:    time.Now().In(time.UTC).Format(time.RFC3339),
 		Timezone:       s.requestTimezone(s.cfg.Timezone),
@@ -231,6 +239,8 @@ func (s *Server) buildActionPlannerInput(ctx context.Context, userID, conversati
 		TelegramReady:  s.telegramReadyForDelivery(),
 		Capabilities:   agent.PlannerCapabilities(),
 		RecentMessages: recent,
+		OpenTasks:      preview,
+		TasksTruncated: truncated,
 		Notes: map[string]string{
 			"execution": "The backend executes only validated typed actions. Missing or vague action fields should become a clarification reply, not an action.",
 		},
@@ -283,7 +293,7 @@ func planNeedsHandling(plan core.ActionPlan) bool {
 		return true
 	}
 	switch plan.Intent {
-	case core.IntentMemorySave, core.IntentTaskCreate, core.IntentReminderCreate, core.IntentReminderCancel, core.IntentReminderReschedule, core.IntentAgendaList, core.IntentGitStatus, core.IntentSystemStatus, core.IntentUnknown:
+	case core.IntentMemorySave, core.IntentTaskCreate, core.IntentTaskComplete, core.IntentTaskCancel, core.IntentTaskReschedule, core.IntentReminderCreate, core.IntentReminderCancel, core.IntentReminderReschedule, core.IntentAgendaList, core.IntentGitStatus, core.IntentSystemStatus, core.IntentUnknown:
 		return true
 	default:
 		return false
@@ -300,6 +310,12 @@ func clarificationForIntent(intent string) string {
 		return "Яке нагадування й на який час перенести?"
 	case core.IntentTaskCreate:
 		return "Що саме записати в задачі?"
+	case core.IntentTaskComplete:
+		return "Яку саме задачу позначити виконаною? Напиши її назву й, якщо є кілька схожих, початковий дедлайн."
+	case core.IntentTaskCancel:
+		return "Яку саме задачу скасувати? Напиши її назву й, якщо є кілька схожих, початковий дедлайн."
+	case core.IntentTaskReschedule:
+		return "Яку задачу й на яку дату та час перенести? Якщо є кілька схожих, уточни початковий дедлайн."
 	case core.IntentMemorySave:
 		return "Що саме запамʼятати?"
 	default:
@@ -349,6 +365,13 @@ func (s *Server) executeActionPlan(
 			if err != nil {
 				return executedActionSet{}, err
 			}
+			executed.replies = append(executed.replies, reply)
+		case core.ActionTaskComplete, core.ActionTaskCancel, core.ActionTaskReschedule:
+			reply, err := s.executeTaskChange(ctx, userID, traceID, action, actionHash, idempotencyKey)
+			if err != nil {
+				return executedActionSet{}, err
+			}
+			executed.refreshTasks = true
 			executed.replies = append(executed.replies, reply)
 		default:
 			if err := s.recordPlannerAction(ctx, userID, traceID, action.Type, "FAILED", actionHash, idempotencyKey, "unknown action type"); err != nil {

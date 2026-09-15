@@ -12,3 +12,7 @@ export function hasNewTelegramReply(previousIds: Set<string>, messages: ChannelM
       message.channel === 'telegram',
   );
 }
+
+export function shouldRefreshTasks(payload: { createdTask?: unknown; refreshTasks?: boolean }) {
+  return Boolean(payload.createdTask || payload.refreshTasks);
+}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { hasNewTelegramReply } from './utils/channel-refresh';
+import { hasNewTelegramReply, shouldRefreshTasks } from './utils/channel-refresh';
 import { canEditReminder, reminderLabels, type ReminderStatus } from './utils/reminder-status';
 
 const config = useRuntimeConfig();
@@ -385,7 +385,7 @@ async function refreshMessagesFromChannels() {
     const previousIds = new Set(messages.value.map((message) => message.id));
     await loadMessages({ merge: true });
     if (hasNewTelegramReply(previousIds, messages.value)) {
-      await loadReminders();
+      await Promise.all([loadTasks(), loadReminders()]);
     }
   } catch {
     // Keep the current chat visible when a background refresh misses one beat.
@@ -553,9 +553,9 @@ function consumeSSEFrame(frame: string) {
         errorMessage.value = normalizeError(error, 'Памʼять створено, але список не оновився.');
       });
     }
-    if (payload.createdTask) {
+    if (shouldRefreshTasks(payload)) {
       void loadTasks().catch((error: any) => {
-        errorMessage.value = normalizeError(error, 'Задачу створено, але список не оновився.');
+        errorMessage.value = normalizeError(error, 'Не вдалося оновити список задач.');
       });
     }
     if (

@@ -50,6 +50,12 @@ func DetectDeterministicIntent(text string) string {
 		return "reminder.cancel"
 	case strings.Contains(normalized, "нагадув") && containsAny(normalized, []string{"перенеси", "перенести", "переплануй", "зміни час"}):
 		return "reminder.reschedule"
+	case containsAny(normalized, []string{"задач", "завдан"}) && containsAny(normalized, []string{"заверши", "виконан", "зроблен"}):
+		return "task.complete"
+	case containsAny(normalized, []string{"задач", "завдан"}) && containsAny(normalized, []string{"скасуй", "скасувати", "відміни", "видали"}):
+		return "task.cancel"
+	case containsAny(normalized, []string{"задач", "завдан", "дедлайн"}) && containsAny(normalized, []string{"перенеси", "перенести", "переплануй", "зміни"}):
+		return "task.reschedule"
 	case containsAny(normalized, []string{"що в мене сьогодні", "що в мене завтра", "що у мене сьогодні", "що у мене завтра", "мої плани", "мої нагадування", "мої задачі", "що заплановано", "які плани на"}):
 		return "agenda.list"
 	case hasGitStatusRequest(normalized):
