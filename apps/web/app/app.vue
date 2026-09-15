@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { hasNewTelegramReply } from './utils/channel-refresh';
+
 const config = useRuntimeConfig();
 
 type ApiState = 'checking' | 'online' | 'offline';
@@ -385,7 +387,11 @@ function stopMessagePolling() {
 async function refreshMessagesFromChannels() {
   if (!conversation.value || sending.value) return;
   try {
+    const previousIds = new Set(messages.value.map((message) => message.id));
     await loadMessages({ merge: true });
+    if (hasNewTelegramReply(previousIds, messages.value)) {
+      await loadReminders();
+    }
   } catch {
     // Keep the current chat visible when a background refresh misses one beat.
   }
@@ -557,9 +563,12 @@ function consumeSSEFrame(frame: string) {
         errorMessage.value = normalizeError(error, 'Задачу створено, але список не оновився.');
       });
     }
-    if (payload.createdReminder) {
+    if (
+      payload.createdReminder ||
+      ['reminder.cancel', 'reminder.reschedule'].includes(payload.route?.intent ?? '')
+    ) {
       void loadReminders().catch((error: any) => {
-        errorMessage.value = normalizeError(error, 'Нагадування створено, але список не оновився.');
+        errorMessage.value = normalizeError(error, 'Не вдалося оновити список нагадувань.');
       });
     }
     if (payload.route?.intent === 'git.status') {

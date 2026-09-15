@@ -52,6 +52,8 @@ Git/deploy awareness is configured with `NOVA_GIT_REPOSITORY`, `NOVA_GIT_BRANCH`
 The schema runner is safe to repeat; Docker also applies the same initial
 schema automatically when it creates a new PostgreSQL volume. Production-safe additive changes live in `infrastructure/postgres/migrations` and are applied once by the migration runner.
 
+Telegram and Web share natural-language reminder management. Try “Що в мене сьогодні?”, “Які плани на завтра?”, “Скасуй нагадування про паспорт”, or “Перенеси нагадування про паспорт на завтра о 10:00”. The planner resolves intent and dates; Go reads the real agenda and validates reminder changes. If several active reminders match, NOVA asks for a subject and original date/time. Cancellation/rescheduling requires the planner; when unavailable, NOVA offers the Web controls. Day views include dated open tasks and scheduled reminders; undated tasks remain in the general agenda. Chat previews show up to eight items per section; mutation searches refuse to guess when 100 or more active reminders would truncate the search.
+
 ## Quality checks
 
 ```bash
@@ -63,6 +65,8 @@ pnpm test
 pnpm build
 pnpm format:check
 ```
+
+The storage integration test runs against a disposable PostgreSQL/pgvector database when `NOVA_TEST_DATABASE_URL` is set: `go test ./internal/storage -run TestReminderChangesIntegration -count=1`. Never point this test at a production database.
 
 ## Current state
 

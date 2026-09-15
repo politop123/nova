@@ -73,7 +73,7 @@ func formatReminderTrigger(triggerAt time.Time, timezone string) string {
 	switch {
 	case sameLocalDate(local, now):
 		day = "сьогодні"
-	case sameLocalDate(local, now.Add(24*time.Hour)):
+	case sameLocalDate(local, now.AddDate(0, 0, 1)):
 		day = "завтра"
 	default:
 		day = local.Format("02.01.2006")

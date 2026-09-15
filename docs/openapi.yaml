@@ -543,7 +543,11 @@ components:
           required: [mode]
           properties:
             mode: { type: string, enum: [deterministic, planner, model] }
-            intent: { type: string }
+            intent:
+              type: string
+              description: >-
+                Includes agenda.list, reminder.create, reminder.cancel, and reminder.reschedule.
+                Reminder changes refresh the existing reminder list; they do not return createdReminder.
             tier: { type: string, enum: [simple, medium, strong] }
             model: { type: string }
         usage:

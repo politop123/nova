@@ -2,6 +2,22 @@ package agent
 
 import "testing"
 
+func TestReminderManagementRoutes(t *testing.T) {
+	for text, want := range map[string]string{
+		"Скасуй нагадування про деплой":                         "reminder.cancel",
+		"Перенеси нагадування перевірити статус NOVA на завтра": "reminder.reschedule",
+		"Що в мене сьогодні?":                                   "agenda.list", "Що у мене завтра?": "agenda.list",
+		"Мої нагадування": "agenda.list", "Які плани на завтра?": "agenda.list",
+		"Скасуй нагадування про паспорт":             "reminder.cancel",
+		"Перенеси нагадування про паспорт на завтра": "reminder.reschedule",
+		"Нагадай завтра купити хліб":                 "reminder.create",
+	} {
+		if got := DetectDeterministicIntent(text); got != want {
+			t.Errorf("%q: %q want %q", text, got, want)
+		}
+	}
+}
+
 func TestRouteRequest(t *testing.T) {
 	models := DefaultModels()
 	got := RouteRequest(Request{Text: "Нагадай завтра подзвонити Сергію"}, models)

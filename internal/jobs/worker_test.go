@@ -147,6 +147,28 @@ func testReminder(deliveryMethod, status string, triggerAt time.Time) storage.Re
 	}
 }
 
+func TestOldReminderScheduleCannotSendAfterReschedule(t *testing.T) {
+	for _, delta := range []time.Duration{-time.Hour, 10 * time.Second, time.Hour} {
+		store := &fakeReminderDeliveryStore{reminder: testReminder("telegram", "scheduled", time.Now().Add(-time.Minute))}
+		task, err := NewReminderDeliveryTask(store.reminder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.reminder.TriggerAt = store.reminder.TriggerAt.Add(delta)
+		telegram := &fakeTelegramSender{}
+		mux := Handler(slog.Default(), store, HandlerConfig{Telegram: telegram, TelegramChatID: 42})
+		if err := mux.ProcessTask(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+		if len(telegram.messages) != 0 || store.reminder.Status != "scheduled" {
+			t.Fatal("old job sent a reminder")
+		}
+		if len(store.events) != 2 || store.events[1].Status != storage.ReminderDeliverySkipped {
+			t.Fatalf("events=%v", store.events)
+		}
+	}
+}
+
 func eventStatuses(events []storage.ReminderDeliveryEvent) []string {
 	result := make([]string, 0, len(events))
 	for _, event := range events {

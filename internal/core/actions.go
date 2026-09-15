@@ -1,19 +1,24 @@
 package core
 
 const (
-	IntentReply          = "reply"
-	IntentUnknown        = "unknown"
-	IntentMemorySave     = "memory.save"
-	IntentTaskCreate     = "task.create"
-	IntentReminderCreate = "reminder.create"
-	IntentGitStatus      = "git.status"
-	IntentSystemStatus   = "system.status"
+	IntentReply              = "reply"
+	IntentUnknown            = "unknown"
+	IntentMemorySave         = "memory.save"
+	IntentTaskCreate         = "task.create"
+	IntentReminderCreate     = "reminder.create"
+	IntentReminderCancel     = "reminder.cancel"
+	IntentReminderReschedule = "reminder.reschedule"
+	IntentAgendaList         = "agenda.list"
+	IntentGitStatus          = "git.status"
+	IntentSystemStatus       = "system.status"
 )
 
 const (
-	ActionMemorySave     = "memory.save"
-	ActionTaskCreate     = "task.create"
-	ActionReminderCreate = "reminder.create"
+	ActionMemorySave         = "memory.save"
+	ActionTaskCreate         = "task.create"
+	ActionReminderCreate     = "reminder.create"
+	ActionReminderCancel     = "reminder.cancel"
+	ActionReminderReschedule = "reminder.reschedule"
 )
 
 // ActionPlan is the model's structured proposal. It is never executed directly:
@@ -24,6 +29,7 @@ type ActionPlan struct {
 	Confidence float64      `json:"confidence"`
 	Reply      string       `json:"reply"`
 	Actions    []NovaAction `json:"actions"`
+	AgendaDate string       `json:"agendaDate"`
 }
 
 type NovaAction struct {
@@ -34,6 +40,7 @@ type NovaAction struct {
 	Kind           string  `json:"kind"`
 	DueAt          string  `json:"dueAt"`
 	TriggerAt      string  `json:"triggerAt"`
+	TargetTime     string  `json:"targetTime"`
 	Timezone       string  `json:"timezone"`
 	DeliveryMethod string  `json:"deliveryMethod"`
 	Priority       string  `json:"priority"`

@@ -72,7 +72,7 @@ func (s *Server) planAndMaybeExecuteActions(
 		}, nil
 	}
 	if s.planner == nil {
-		return plannedActionResult{}, nil
+		return s.reminderManagementFallback(ctx, userID, text, deterministicIntent), nil
 	}
 	plannerInput, err := s.buildActionPlannerInput(ctx, userID, conversation.ID, channel, modality, text)
 	if err != nil {
@@ -83,7 +83,7 @@ func (s *Server) planAndMaybeExecuteActions(
 		model = s.models.Simple
 	}
 	if model == "" {
-		return plannedActionResult{}, nil
+		return s.reminderManagementFallback(ctx, userID, text, deterministicIntent), nil
 	}
 	estimatedUsage := usage.EstimateRequest(model, agent.ActionPlannerProfile+"\n"+plannerInput, 700)
 	if err := s.checkBudget(ctx, userID, estimatedUsage.EstimatedCostUSD); err != nil {
@@ -97,7 +97,7 @@ func (s *Server) planAndMaybeExecuteActions(
 	result, err := s.planner.PlanActions(ctx, model, agent.ActionPlannerProfile, plannerInput)
 	if err != nil {
 		s.logger.Warn("action planner failed; falling back to chat route", "trace_id", traceID, "error", err)
-		return plannedActionResult{}, nil
+		return s.reminderManagementFallback(ctx, userID, text, deterministicIntent), nil
 	}
 	plannerUsage := result.Usage
 	if plannerUsage.Model == "" {
@@ -149,10 +149,15 @@ func (s *Server) planAndMaybeExecuteActions(
 		}, nil
 	}
 	if !planNeedsHandling(plan) {
-		return plannedActionResult{Usage: &plannerUsage}, nil
+		fallback := s.reminderManagementFallback(ctx, userID, text, deterministicIntent)
+		fallback.Usage = &plannerUsage
+		return fallback, nil
 	}
-	if plan.Confidence > 0 && plan.Confidence < plannerMinimumActionConfidence {
+	if plan.Confidence < plannerMinimumActionConfidence {
 		reply := strings.TrimSpace(plan.Reply)
+		if plan.Intent == core.IntentReminderCancel || plan.Intent == core.IntentReminderReschedule {
+			reply = clarificationForIntent(plan.Intent)
+		}
 		if reply == "" {
 			reply = "Я не до кінця впевнена, яку дію треба виконати. Уточни, будь ласка."
 		}
@@ -163,8 +168,15 @@ func (s *Server) planAndMaybeExecuteActions(
 			Usage:         &plannerUsage,
 		}, nil
 	}
+	if plan.Intent == core.IntentAgendaList {
+		return plannedActionResult{Handled: true, Intent: plan.Intent, Usage: &plannerUsage,
+			AssistantText: s.agendaAssistantText(ctx, userID, plan.AgendaDate)}, nil
+	}
 	if len(plan.Actions) == 0 {
 		reply := strings.TrimSpace(plan.Reply)
+		if plan.Intent == core.IntentReminderCancel || plan.Intent == core.IntentReminderReschedule {
+			reply = clarificationForIntent(plan.Intent)
+		}
 		if reply == "" {
 			reply = clarificationForIntent(plan.Intent)
 		}
@@ -228,6 +240,7 @@ func (s *Server) buildActionPlannerInput(ctx context.Context, userID, conversati
 func normalizeServerActionPlan(plan core.ActionPlan) core.ActionPlan {
 	plan.Intent = strings.TrimSpace(plan.Intent)
 	plan.Reply = strings.TrimSpace(plan.Reply)
+	plan.AgendaDate = strings.TrimSpace(plan.AgendaDate)
 	if plan.Intent == "" {
 		plan.Intent = core.IntentUnknown
 	}
@@ -249,6 +262,7 @@ func normalizeServerActionPlan(plan core.ActionPlan) core.ActionPlan {
 		action.Kind = strings.TrimSpace(action.Kind)
 		action.DueAt = strings.TrimSpace(action.DueAt)
 		action.TriggerAt = strings.TrimSpace(action.TriggerAt)
+		action.TargetTime = strings.TrimSpace(action.TargetTime)
 		action.Timezone = strings.TrimSpace(action.Timezone)
 		action.DeliveryMethod = strings.TrimSpace(action.DeliveryMethod)
 		action.Priority = strings.TrimSpace(action.Priority)
@@ -269,7 +283,7 @@ func planNeedsHandling(plan core.ActionPlan) bool {
 		return true
 	}
 	switch plan.Intent {
-	case core.IntentMemorySave, core.IntentTaskCreate, core.IntentReminderCreate, core.IntentGitStatus, core.IntentSystemStatus, core.IntentUnknown:
+	case core.IntentMemorySave, core.IntentTaskCreate, core.IntentReminderCreate, core.IntentReminderCancel, core.IntentReminderReschedule, core.IntentAgendaList, core.IntentGitStatus, core.IntentSystemStatus, core.IntentUnknown:
 		return true
 	default:
 		return false
@@ -280,6 +294,10 @@ func clarificationForIntent(intent string) string {
 	switch intent {
 	case core.IntentReminderCreate:
 		return "Коли саме нагадати?"
+	case core.IntentReminderCancel:
+		return "Яке саме нагадування скасувати? Напиши його тему."
+	case core.IntentReminderReschedule:
+		return "Яке нагадування й на який час перенести?"
 	case core.IntentTaskCreate:
 		return "Що саме записати в задачі?"
 	case core.IntentMemorySave:
@@ -325,6 +343,12 @@ func (s *Server) executeActionPlan(
 				return executedActionSet{}, err
 			}
 			executed.createdReminder = reminder
+			executed.replies = append(executed.replies, reply)
+		case core.ActionReminderCancel, core.ActionReminderReschedule:
+			reply, err := s.executeReminderChange(ctx, userID, traceID, action, actionHash, idempotencyKey)
+			if err != nil {
+				return executedActionSet{}, err
+			}
 			executed.replies = append(executed.replies, reply)
 		default:
 			if err := s.recordPlannerAction(ctx, userID, traceID, action.Type, "FAILED", actionHash, idempotencyKey, "unknown action type"); err != nil {

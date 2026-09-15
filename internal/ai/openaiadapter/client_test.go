@@ -54,7 +54,7 @@ func TestActionPlanSchemaAllowsReadOnlyStatusIntents(t *testing.T) {
 	for _, value := range values {
 		seen[value] = true
 	}
-	for _, want := range []string{core.IntentGitStatus, core.IntentSystemStatus} {
+	for _, want := range []string{core.IntentGitStatus, core.IntentSystemStatus, core.IntentAgendaList, core.IntentReminderCancel, core.IntentReminderReschedule} {
 		if !seen[want] {
 			t.Fatalf("action plan schema does not allow %q", want)
 		}

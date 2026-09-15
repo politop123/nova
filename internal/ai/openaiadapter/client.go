@@ -108,6 +108,7 @@ func (c *Client) PlanActions(ctx context.Context, model, instructions, input str
 func normalizeActionPlan(plan core.ActionPlan) core.ActionPlan {
 	plan.Intent = strings.TrimSpace(plan.Intent)
 	plan.Reply = strings.TrimSpace(plan.Reply)
+	plan.AgendaDate = strings.TrimSpace(plan.AgendaDate)
 	if plan.Intent == "" {
 		plan.Intent = core.IntentUnknown
 	}
@@ -120,6 +121,7 @@ func normalizeActionPlan(plan core.ActionPlan) core.ActionPlan {
 		action.Kind = strings.TrimSpace(action.Kind)
 		action.DueAt = strings.TrimSpace(action.DueAt)
 		action.TriggerAt = strings.TrimSpace(action.TriggerAt)
+		action.TargetTime = strings.TrimSpace(action.TargetTime)
 		action.Timezone = strings.TrimSpace(action.Timezone)
 		action.DeliveryMethod = strings.TrimSpace(action.DeliveryMethod)
 		action.Priority = strings.TrimSpace(action.Priority)
@@ -133,7 +135,7 @@ func actionPlanSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"intent", "confidence", "reply", "actions"},
+		"required":             []string{"intent", "confidence", "reply", "actions", "agendaDate"},
 		"properties": map[string]any{
 			"intent": map[string]any{
 				"type": "string",
@@ -143,6 +145,9 @@ func actionPlanSchema() map[string]any {
 					core.IntentMemorySave,
 					core.IntentTaskCreate,
 					core.IntentReminderCreate,
+					core.IntentReminderCancel,
+					core.IntentReminderReschedule,
+					core.IntentAgendaList,
 					core.IntentGitStatus,
 					core.IntentSystemStatus,
 				},
@@ -150,20 +155,21 @@ func actionPlanSchema() map[string]any {
 			"confidence": map[string]any{
 				"type": "number",
 			},
-			"reply": map[string]any{"type": "string"},
+			"reply":      map[string]any{"type": "string"},
+			"agendaDate": map[string]any{"type": "string"},
 			"actions": map[string]any{
 				"type": "array",
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
 					"required": []string{
-						"type", "title", "details", "content", "kind", "dueAt", "triggerAt",
+						"type", "title", "details", "content", "kind", "dueAt", "triggerAt", "targetTime",
 						"timezone", "deliveryMethod", "priority", "projectKey", "expiresAt", "confidence",
 					},
 					"properties": map[string]any{
 						"type": map[string]any{
 							"type": "string",
-							"enum": []string{core.ActionMemorySave, core.ActionTaskCreate, core.ActionReminderCreate},
+							"enum": []string{core.ActionMemorySave, core.ActionTaskCreate, core.ActionReminderCreate, core.ActionReminderCancel, core.ActionReminderReschedule},
 						},
 						"title":          map[string]any{"type": "string"},
 						"details":        map[string]any{"type": "string"},
@@ -171,6 +177,7 @@ func actionPlanSchema() map[string]any {
 						"kind":           map[string]any{"type": "string"},
 						"dueAt":          map[string]any{"type": "string"},
 						"triggerAt":      map[string]any{"type": "string"},
+						"targetTime":     map[string]any{"type": "string"},
 						"timezone":       map[string]any{"type": "string"},
 						"deliveryMethod": map[string]any{"type": "string", "enum": []string{"", "web", "telegram"}},
 						"priority":       map[string]any{"type": "string", "enum": []string{"", "low", "normal", "high"}},

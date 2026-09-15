@@ -543,6 +543,15 @@ func (s *Store) CreateTask(ctx context.Context, task Task, idempotencyKey string
 }
 
 func (s *Store) ListTasks(ctx context.Context, userID, status string, limit int) ([]Task, error) {
+	return s.listTasks(ctx, userID, status, limit, nil, nil)
+}
+
+// ListAgendaTasks filters before LIMIT so earlier overdue tasks cannot hide a day's tasks.
+func (s *Store) ListAgendaTasks(ctx context.Context, userID string, start, end *time.Time) ([]Task, error) {
+	return s.listTasks(ctx, userID, "open", 100, start, end)
+}
+
+func (s *Store) listTasks(ctx context.Context, userID, status string, limit int, start, end *time.Time) ([]Task, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("database is not configured")
 	}
@@ -554,12 +563,14 @@ func (s *Store) ListTasks(ctx context.Context, userID, status string, limit int)
 			created_at, updated_at
 		FROM tasks
 		WHERE user_id = $1::uuid AND (NULLIF($2, '') IS NULL OR status = $2)
+			AND ($4::timestamptz IS NULL OR due_at >= $4)
+			AND ($5::timestamptz IS NULL OR due_at < $5)
 		ORDER BY
 			CASE status WHEN 'open' THEN 0 WHEN 'done' THEN 1 ELSE 2 END,
 			due_at ASC NULLS LAST,
 			updated_at DESC
 		LIMIT $3
-	`, userID, status, limit)
+	`, userID, status, limit, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
@@ -675,6 +686,14 @@ func (s *Store) CreateReminder(ctx context.Context, reminder Reminder, idempoten
 }
 
 func (s *Store) ListReminders(ctx context.Context, userID, status string, limit int) ([]Reminder, error) {
+	return s.listReminders(ctx, userID, status, limit, nil, nil)
+}
+
+func (s *Store) ListAgendaReminders(ctx context.Context, userID string, start, end *time.Time) ([]Reminder, error) {
+	return s.listReminders(ctx, userID, "scheduled", 100, start, end)
+}
+
+func (s *Store) listReminders(ctx context.Context, userID, status string, limit int, start, end *time.Time) ([]Reminder, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("database is not configured")
 	}
@@ -686,12 +705,14 @@ func (s *Store) ListReminders(ctx context.Context, userID, status string, limit 
 			priority, delivery_method, status, created_at, updated_at
 		FROM reminders
 		WHERE user_id = $1::uuid AND (NULLIF($2, '') IS NULL OR status = $2)
+			AND ($4::timestamptz IS NULL OR trigger_at >= $4)
+			AND ($5::timestamptz IS NULL OR trigger_at < $5)
 		ORDER BY
 			CASE status WHEN 'scheduled' THEN 0 WHEN 'delivered' THEN 1 ELSE 2 END,
 			trigger_at ASC,
 			updated_at DESC
 		LIMIT $3
-	`, userID, status, limit)
+	`, userID, status, limit, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("list reminders: %w", err)
 	}

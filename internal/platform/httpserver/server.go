@@ -987,10 +987,7 @@ func (s *Server) scheduleReminder(ctx context.Context, reminder storage.Reminder
 		asynq.TaskID(jobs.ReminderTaskID(reminder)),
 		asynq.MaxRetry(5),
 	)
-	if errors.Is(err, asynq.ErrDuplicateTask) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, asynq.ErrDuplicateTask) && !errors.Is(err, asynq.ErrTaskIDConflict) {
 		return err
 	}
 	return s.store.CreateScheduledJob(ctx, jobs.TypeReminderDelivery, reminder.ID, reminder.TriggerAt)

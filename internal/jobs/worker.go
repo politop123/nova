@@ -84,8 +84,12 @@ func Handler(logger *slog.Logger, store ReminderDeliveryStore, configs ...Handle
 		if err := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliveryAttempted, attempt, provider, "Worker почав спробу доставки.", nil); err != nil {
 			return err
 		}
-		if reminder.Status != "scheduled" || reminder.TriggerAt.After(time.Now().UTC().Add(30*time.Second)) {
+		staleSchedule := payload.TriggerAt != "" && payload.TriggerAt != reminder.TriggerAt.UTC().Format(time.RFC3339)
+		if staleSchedule || reminder.Status != "scheduled" || reminder.TriggerAt.After(time.Now().UTC().Add(30*time.Second)) {
 			detail := skippedReminderDeliveryDetail(reminder)
+			if staleSchedule {
+				detail = "Пропущено старе завдання: час нагадування змінився."
+			}
 			if err := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliverySkipped, attempt, provider, detail, nil); err != nil {
 				return err
 			}
