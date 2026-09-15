@@ -32,8 +32,9 @@ type TelegramSender interface {
 
 type ReminderDeliveryStore interface {
 	GetReminder(ctx context.Context, userID, reminderID string) (storage.Reminder, error)
-	DeliverReminder(ctx context.Context, userID, reminderID string) (storage.Reminder, bool, error)
+	DeliverReminderForSchedule(ctx context.Context, userID, reminderID string, expectedTrigger time.Time) (storage.Reminder, bool, error)
 	RecordReminderDeliveryEvent(ctx context.Context, event storage.ReminderDeliveryEvent) (storage.ReminderDeliveryEvent, error)
+	ClaimReminderDeliveryAttempt(ctx context.Context, reminder storage.Reminder, event storage.ReminderDeliveryEvent) (bool, error)
 }
 
 type HandlerConfig struct {
@@ -81,11 +82,11 @@ func Handler(logger *slog.Logger, store ReminderDeliveryStore, configs ...Handle
 			return err
 		}
 		provider := reminderDeliveryProvider(reminder)
-		if err := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliveryAttempted, attempt, provider, "Worker почав спробу доставки.", nil); err != nil {
-			return err
-		}
 		staleSchedule := payload.TriggerAt != "" && payload.TriggerAt != reminder.TriggerAt.UTC().Format(time.RFC3339)
 		if staleSchedule || reminder.Status != "scheduled" || reminder.TriggerAt.After(time.Now().UTC().Add(30*time.Second)) {
+			if err := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliveryAttempted, attempt, provider, "Worker перевірив завдання доставки.", nil); err != nil {
+				return err
+			}
 			detail := skippedReminderDeliveryDetail(reminder)
 			if staleSchedule {
 				detail = "Пропущено старе завдання: час нагадування змінився."
@@ -99,6 +100,25 @@ func Handler(logger *slog.Logger, store ReminderDeliveryStore, configs ...Handle
 				"attempt", attempt,
 			)
 			return nil
+		}
+		if reminder.TriggerAt.Before(time.Now().UTC().Add(-MaxReminderLateness)) {
+			if err := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliveryFailed, attempt, provider,
+				"Час нагадування минув понад 24 години тому. Потрібно обрати новий час.", nil); err != nil {
+				return err
+			}
+			return fmt.Errorf("reminder is too old for automatic delivery: %w", asynq.SkipRetry)
+		}
+		claimed, err := store.ClaimReminderDeliveryAttempt(ctx, reminder, storage.ReminderDeliveryEvent{
+			ReminderID: reminder.ID, UserID: reminder.UserID, Channel: reminder.DeliveryMethod, Provider: provider,
+			Status: storage.ReminderDeliveryAttempted, Attempt: attempt, Detail: "Worker почав спробу доставки.",
+			IdempotencyKey: reminderDeliveryEventID(payload, storage.ReminderDeliveryAttempted, attempt),
+		})
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliverySkipped, attempt, provider,
+				"Цю спробу вже почав інший обробник або нагадування змінилося.", nil)
 		}
 		switch reminder.DeliveryMethod {
 		case "telegram":
@@ -125,7 +145,7 @@ func Handler(logger *slog.Logger, store ReminderDeliveryStore, configs ...Handle
 			}
 			return deliveryErr
 		}
-		updatedReminder, delivered, err := store.DeliverReminder(ctx, payload.UserID, payload.ReminderID)
+		updatedReminder, delivered, err := store.DeliverReminderForSchedule(ctx, payload.UserID, payload.ReminderID, reminder.TriggerAt)
 		if err != nil {
 			deliveryErr := fmt.Errorf("mark reminder delivered: %w", err)
 			if eventErr := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliveryFailed, attempt, provider, "Повідомлення могло бути відправлене, але статус нагадування не збережено.", deliveryErr); eventErr != nil {

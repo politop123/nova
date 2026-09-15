@@ -68,6 +68,10 @@ pnpm format:check
 
 The storage integration test runs against a disposable PostgreSQL/pgvector database when `NOVA_TEST_DATABASE_URL` is set: `go test ./internal/storage -run TestReminderChangesIntegration -count=1`. Never point this test at a production database.
 
+Reminder queue submissions are durable in PostgreSQL. The worker automatically retries submission after Redis outages and recovers missing, unattempted queue jobs. Cancelled and moved reminders invalidate old work. Deliveries more than 24 hours overdue, exhausted queue retries, or missing jobs that may already have sent a message are marked for review instead of replayed. Ask “Скажи свій статус” to see delayed/failed reminders; move a failed reminder to a new future time to try again.
+
+For recovery failure drills, provide disposable `NOVA_TEST_DATABASE_URL` and `NOVA_TEST_REDIS_URL`, then run `go test ./internal/jobs -run TestReminderDispatchIntegration -count=1`. This test uses a fake Telegram transport. Run database-backed package tests sequentially against a disposable database; they install schemas/migrations for verification.
+
 ## Current state
 
 This repository is the implementation foundation for v0.1. It includes Go core contracts, a working API health endpoint, an Asynq worker bootstrap, a Nuxt PWA shell, local infrastructure, and the initial database schema. The current slice includes persisted conversations, a model-backed structured action planner with deterministic fallback, SSE text streaming, bounded conversation summaries, managed memories with provenance and soft-delete, tasks, scheduled reminders with delivery history, Telegram webhook/voice handling, Git/deploy status awareness, operational self-status with worker heartbeat, model usage accounting, action audit records, and daily/monthly budget guards. Product features are intentionally delivered as vertical slices in the order documented in the implementation plan.

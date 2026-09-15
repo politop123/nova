@@ -924,6 +924,14 @@ func (s *Store) CreateScheduledJob(ctx context.Context, jobType, entityID string
 }
 
 func (s *Store) DeliverReminder(ctx context.Context, userID, reminderID string) (Reminder, bool, error) {
+	return s.deliverReminder(ctx, userID, reminderID, nil)
+}
+
+func (s *Store) DeliverReminderForSchedule(ctx context.Context, userID, reminderID string, expectedTrigger time.Time) (Reminder, bool, error) {
+	return s.deliverReminder(ctx, userID, reminderID, &expectedTrigger)
+}
+
+func (s *Store) deliverReminder(ctx context.Context, userID, reminderID string, expectedTrigger *time.Time) (Reminder, bool, error) {
 	if s == nil || s.db == nil {
 		return Reminder{}, false, errors.New("database is not configured")
 	}
@@ -951,7 +959,8 @@ func (s *Store) DeliverReminder(ctx context.Context, userID, reminderID string) 
 	if err != nil {
 		return Reminder{}, false, fmt.Errorf("get reminder for delivery: %w", err)
 	}
-	if reminder.Status != "scheduled" || reminder.TriggerAt.After(time.Now().UTC().Add(30*time.Second)) {
+	if reminder.Status != "scheduled" || reminder.TriggerAt.After(time.Now().UTC().Add(30*time.Second)) ||
+		(expectedTrigger != nil && !reminder.TriggerAt.Equal(*expectedTrigger)) {
 		if err := tx.Commit(ctx); err != nil {
 			return Reminder{}, false, fmt.Errorf("commit skipped reminder delivery: %w", err)
 		}

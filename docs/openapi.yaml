@@ -661,6 +661,9 @@ components:
           $ref: '#/components/schemas/GitStatus'
     OperationalStatusCheck:
       type: object
+      description: >-
+        Reminder status includes scheduled totals, imminent pending queue submissions,
+        overdue reminders, and terminal dispatch failures requiring review.
       required: [label, status]
       properties:
         label: { type: string, example: Telegram }

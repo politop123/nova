@@ -30,6 +30,20 @@ services:
       timeout: 3s
       retries: 10
 
+  migrate:
+    profiles: ['full']
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        APP: migrate
+    command: ['-schema', '/schema/init.sql', '-migrations', '/schema/migrations']
+    environment:
+      DATABASE_URL: postgresql://nova:nova_local_only@postgres:5432/nova
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     profiles: ['full']
     build:
@@ -63,6 +77,8 @@ services:
     ports:
       - '${API_PORT:-4000}:4000'
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -98,6 +114,8 @@ services:
       TELEGRAM_ALLOWED_CHAT_ID: ${TELEGRAM_ALLOWED_CHAT_ID:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

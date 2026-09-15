@@ -95,12 +95,9 @@ func (s *Server) buildOperationalStatus(ctx context.Context, userID string) oper
 	if s.store == nil {
 		addCheck("reminders", "Нагадування", checkStatusNotConfigured, "Сховище нагадувань не підключене.")
 	} else {
-		reminders, err := s.store.ListReminders(ctx, userID, "scheduled", 100)
-		if err != nil {
-			addCheck("reminders", "Нагадування", checkStatusDegraded, "Не вдалося прочитати заплановані нагадування.")
-		} else {
-			addCheck("reminders", "Нагадування", checkStatusOK, fmt.Sprintf("Заплановано: %d.", len(reminders)))
-		}
+		stats, err := s.store.ReminderDispatchSummary(ctx, userID)
+		check := reminderDispatchStatusCheck(stats, err)
+		addCheck("reminders", check.Label, check.Status, check.Detail)
 	}
 
 	if s.cfg.OpenAIAPIKey == "" {
@@ -137,6 +134,19 @@ func (s *Server) buildOperationalStatus(ctx context.Context, userID string) oper
 	}
 
 	return response
+}
+
+func reminderDispatchStatusCheck(stats storage.ReminderDispatchStats, err error) operationalStatusCheck {
+	check := operationalStatusCheck{Label: "Нагадування", Status: checkStatusOK}
+	if err != nil {
+		check.Status, check.Detail = checkStatusDegraded, "Не вдалося перевірити збережені нагадування й відновлення черги."
+		return check
+	}
+	check.Detail = fmt.Sprintf("Заплановано: %d. Очікують черги: %d. Із затримкою: %d. Потребують уваги: %d.", stats.Scheduled, stats.Pending, stats.Overdue, stats.Failed)
+	if stats.Pending > 0 || stats.Overdue > 0 || stats.Failed > 0 {
+		check.Status = checkStatusDegraded
+	}
+	return check
 }
 
 func (s *Server) systemStatusAssistantText(ctx context.Context, userID string) string {

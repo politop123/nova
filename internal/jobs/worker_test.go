@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibiken/asynq"
+
 	"nova.local/core/internal/storage"
 )
 
@@ -40,6 +42,13 @@ func (s *fakeReminderDeliveryStore) DeliverReminder(ctx context.Context, userID,
 	return s.reminder, true, nil
 }
 
+func (s *fakeReminderDeliveryStore) DeliverReminderForSchedule(ctx context.Context, userID, reminderID string, expectedTrigger time.Time) (storage.Reminder, bool, error) {
+	if !s.reminder.TriggerAt.Equal(expectedTrigger) {
+		return s.reminder, false, nil
+	}
+	return s.DeliverReminder(ctx, userID, reminderID)
+}
+
 func (s *fakeReminderDeliveryStore) RecordReminderDeliveryEvent(ctx context.Context, event storage.ReminderDeliveryEvent) (storage.ReminderDeliveryEvent, error) {
 	event.ID = "event-" + event.Status
 	if event.CreatedAt.IsZero() {
@@ -49,9 +58,20 @@ func (s *fakeReminderDeliveryStore) RecordReminderDeliveryEvent(ctx context.Cont
 	return event, nil
 }
 
+func (s *fakeReminderDeliveryStore) ClaimReminderDeliveryAttempt(ctx context.Context, reminder storage.Reminder, event storage.ReminderDeliveryEvent) (bool, error) {
+	for _, previous := range s.events {
+		if previous.IdempotencyKey == event.IdempotencyKey {
+			return false, nil
+		}
+	}
+	_, err := s.RecordReminderDeliveryEvent(ctx, event)
+	return err == nil, err
+}
+
 type fakeTelegramSender struct {
 	err      error
 	messages []string
+	onSend   func()
 }
 
 func (s *fakeTelegramSender) SendMessage(ctx context.Context, chatID int64, text string) error {
@@ -59,6 +79,9 @@ func (s *fakeTelegramSender) SendMessage(ctx context.Context, chatID int64, text
 		return s.err
 	}
 	s.messages = append(s.messages, text)
+	if s.onSend != nil {
+		s.onSend()
+	}
 	return nil
 }
 
@@ -166,6 +189,22 @@ func TestOldReminderScheduleCannotSendAfterReschedule(t *testing.T) {
 		if len(store.events) != 2 || store.events[1].Status != storage.ReminderDeliverySkipped {
 			t.Fatalf("events=%v", store.events)
 		}
+	}
+}
+
+func TestExpiredReminderDoesNotSendOrRetry(t *testing.T) {
+	store := &fakeReminderDeliveryStore{reminder: testReminder("telegram", "scheduled", time.Now().Add(-25*time.Hour))}
+	telegram := &fakeTelegramSender{}
+	task, err := NewReminderDeliveryTask(store.reminder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := Handler(slog.Default(), store, HandlerConfig{Telegram: telegram, TelegramChatID: 42})
+	if err := mux.ProcessTask(context.Background(), task); !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("expected terminal expiry, got %v", err)
+	}
+	if len(telegram.messages) != 0 || store.events[len(store.events)-1].Status != storage.ReminderDeliveryFailed {
+		t.Fatal("expired delivery was not blocked/audited")
 	}
 }
 

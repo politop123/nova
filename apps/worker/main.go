@@ -40,6 +40,13 @@ func main() {
 		os.Exit(1)
 	}
 	store := storage.New(db)
+	queueOpt := asynq.RedisClientOpt{Addr: redisAddr, DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second}
+	queueClient := asynq.NewClient(queueOpt)
+	defer queueClient.Close()
+	queueInspector := asynq.NewInspector(queueOpt)
+	defer queueInspector.Close()
+	dispatchStop := jobs.StartReminderDispatch(ctx, logger, store, jobs.AsynqReminderQueue{Client: queueClient, Inspector: queueInspector})
+	defer dispatchStop()
 	heartbeatStop := jobs.StartHeartbeat(context.Background(), logger, store, jobs.HeartbeatConfig{
 		ServiceName: jobs.ServiceWorker,
 		InstanceID:  WorkerInstanceID(),

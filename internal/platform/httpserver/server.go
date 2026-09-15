@@ -975,22 +975,20 @@ func (s *Server) buildReminderUpdate(request updateReminderRequest) (storage.Rem
 }
 
 func (s *Server) scheduleReminder(ctx context.Context, reminder storage.Reminder) error {
-	if s.reminderQueue == nil {
-		return errors.New("reminder queue is not configured")
-	}
-	task, err := jobs.NewReminderDeliveryTask(reminder)
+	durable, err := s.store.ReminderDispatchDurable(ctx, reminder)
 	if err != nil {
 		return err
 	}
-	_, err = s.reminderQueue.EnqueueContext(ctx, task,
-		asynq.ProcessAt(reminder.TriggerAt),
-		asynq.TaskID(jobs.ReminderTaskID(reminder)),
-		asynq.MaxRetry(5),
-	)
-	if err != nil && !errors.Is(err, asynq.ErrDuplicateTask) && !errors.Is(err, asynq.ErrTaskIDConflict) {
-		return err
+	if !durable {
+		return errors.New("reminder dispatch is missing, stale, or requires attention")
 	}
-	return s.store.CreateScheduledJob(ctx, jobs.TypeReminderDelivery, reminder.ID, reminder.TriggerAt)
+	if err := jobs.EnqueueReminder(ctx, s.reminderQueue, reminder); err != nil {
+		// The database trigger has already committed the queue intent. A Redis
+		// outage must not turn an accepted reminder into a failed create response.
+		s.logger.Warn("reminder saved for automatic queue recovery", "reminder_id", reminder.ID, "error", err)
+		return nil
+	}
+	return nil
 }
 
 func (s *Server) requestTimezone(value string) string {

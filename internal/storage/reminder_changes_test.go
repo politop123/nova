@@ -30,6 +30,13 @@ func TestReminderChangesIntegration(t *testing.T) {
 	if _, err = db.Exec(ctx, string(schema)); err != nil {
 		t.Fatal(err)
 	}
+	dispatchSchema, err := os.ReadFile("../../infrastructure/postgres/migrations/202609150001_reminder_dispatches.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, string(dispatchSchema)); err != nil {
+		t.Fatal(err)
+	}
 	store := New(db)
 	var userID, otherID string
 	if err = db.QueryRow(ctx, "INSERT INTO users DEFAULT VALUES RETURNING id::text").Scan(&userID); err != nil {
@@ -96,11 +103,17 @@ func TestReminderChangesIntegration(t *testing.T) {
 	if err != nil || current.Status != "scheduled" {
 		t.Fatalf("rollback failed: %v %v", current, err)
 	}
+	if durable, err := store.ReminderDispatchDurable(ctx, current); err != nil || !durable {
+		t.Fatalf("audit failure did not roll back dispatch: %v %v", durable, err)
+	}
 	cancel := action
 	cancel.ActionName = "reminder.cancel"
 	cancel.IdempotencyKey = "cancel"
 	if _, err = store.ChangeScheduledReminder(ctx, current, nil, "Europe/Kyiv", cancel); err != nil {
 		t.Fatal(err)
+	}
+	if durable, err := store.ReminderDispatchDurable(ctx, current); err != nil || durable {
+		t.Fatalf("cancelled dispatch still active: %v %v", durable, err)
 	}
 	if _, delivered, err := store.DeliverReminder(ctx, userID, r.ID); err != nil || delivered {
 		t.Fatalf("cancelled reminder delivered=%v err=%v", delivered, err)

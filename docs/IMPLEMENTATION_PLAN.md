@@ -60,8 +60,9 @@ Exit: no CONFIRM action runs without a short-lived explicit approval tied to the
 1. Add task and reminder APIs with timezone-aware parsing. **Done:** Go endpoints accept RFC3339 or local datetimes interpreted in the user's timezone.
 2. Schedule deterministic BullMQ jobs. **Adjusted for Go:** reminders are scheduled through Asynq/Redis.
 3. Deliver reminders without an LLM call when stored text is sufficient. **Done:** the worker marks due reminders as delivered, writes a notification record, and can send Telegram reminder messages when configured.
-4. Add retries, dead-letter handling, cancellation, and idempotent delivery. **Foundation done:** Asynq retries delivery jobs and cancelled or already delivered reminders are skipped safely.
-5. Record notification and delivery status. **Done:** delivery writes to `notifications` and updates reminder status.
+4. Add retries, dead-letter handling, cancellation, and idempotent delivery. **Recovery implemented:** Asynq retries deliveries; a PostgreSQL-backed dispatcher recovers queue submissions after outages, leases work across restarts, and skips cancelled/stale jobs. Each delivery attempt is reserved once. Archived, uncertain, and over-24-hour-old deliveries require review instead of automatic replay. Exactly-once external delivery remains limited by provider/database crash windows.
+5. Record notification and delivery status. **Done:** delivery writes to `notifications`, `reminder_delivery_events`, and reminder state; operational status includes delayed, pending-dispatch, and terminally failed reminders.
+6. Manage reminders from Telegram/Web using natural language. **Done:** shared agenda queries, cancellation, and rescheduling with ambiguous-match clarification and timezone-aware dates.
 
 Exit: create, edit, cancel, and receive a reminder reliably across restarts.
 
@@ -79,7 +80,7 @@ Exit: the same conversation continues between Web and Telegram, and proactive re
 
 1. Add structured logs, traces, metrics, rate limits, and backups.
 2. Encrypt integration secrets and define data retention rules.
-3. Add failure drills for Redis, PostgreSQL, provider timeouts, and repeated webhook delivery.
+3. Add failure drills for Redis, PostgreSQL, provider timeouts, and repeated webhook delivery. **Reminder recovery covered:** disposable PostgreSQL/Redis tests exercise unavailable connections, lost queue tasks, expired claims, cancellation/rescheduling races, archived jobs, uncertain sends, and concurrent consumers. Broader provider/webhook failure drills remain.
 4. Build cost and audit dashboards.
 5. Run the complete v0.1 acceptance suite.
 

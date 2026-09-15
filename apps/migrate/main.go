@@ -16,7 +16,7 @@ import (
 
 func main() {
 	schemaPath := flag.String("schema", "infrastructure/postgres/init.sql", "path to the initial schema")
-	migrationsPath := flag.String("migrations", "", "optional directory with idempotent SQL migration files")
+	migrationsPath := flag.String("migrations", "infrastructure/postgres/migrations", "directory with additive SQL migration files")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
