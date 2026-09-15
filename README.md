@@ -54,6 +54,8 @@ schema automatically when it creates a new PostgreSQL volume. Production-safe ad
 
 Telegram and Web share natural-language reminder management. Try “Що в мене сьогодні?”, “Які плани на завтра?”, “Скасуй нагадування про паспорт”, or “Перенеси нагадування про паспорт на завтра о 10:00”. The planner resolves intent and dates; Go reads the real agenda and validates reminder changes. If several active reminders match, NOVA asks for a subject and original date/time. Cancellation/rescheduling requires the planner; when unavailable, NOVA offers the Web controls. Day views include dated open tasks and scheduled reminders; undated tasks remain in the general agenda. Chat previews show up to eight items per section; mutation searches refuse to guess when 100 or more active reminders would truncate the search.
 
+New private Telegram reminders also have **Виконано**, **Через 10 хв**, and **Через годину** buttons. They update the reminder and shared conversation without an AI request. After one button succeeds, the keyboard is removed; retries cannot apply a second change. Controls expire after seven days and reject reminders cancelled or moved to another time. **Надіслано** means notification sent; **Виконано** means explicitly marked done (not completion of a separate task). Web reflects these changes automatically. Existing Telegram messages are unchanged; see `DEPLOYMENT.md` for callback webhook/allowlist requirements.
+
 ## Quality checks
 
 ```bash
@@ -66,7 +68,7 @@ pnpm build
 pnpm format:check
 ```
 
-The storage integration test runs against a disposable PostgreSQL/pgvector database when `NOVA_TEST_DATABASE_URL` is set: `go test ./internal/storage -run TestReminderChangesIntegration -count=1`. Never point this test at a production database.
+Storage integration tests run against a disposable PostgreSQL/pgvector database when `NOVA_TEST_DATABASE_URL` is set: `go test -race ./internal/storage -count=1`. Reminder callback integration is covered by `go test -race ./internal/platform/httpserver -run TestTelegramReminderCallbackWebhookIntegration -count=1`. Never point these tests at a production database; they install schemas and temporary test constraints.
 
 Reminder queue submissions are durable in PostgreSQL. The worker automatically retries submission after Redis outages and recovers missing, unattempted queue jobs. Cancelled and moved reminders invalidate old work. Deliveries more than 24 hours overdue, exhausted queue retries, or missing jobs that may already have sent a message are marked for review instead of replayed. Ask “Скажи свій статус” to see delayed/failed reminders; move a failed reminder to a new future time to try again.
 

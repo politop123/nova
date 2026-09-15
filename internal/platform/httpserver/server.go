@@ -603,6 +603,10 @@ func (s *Server) telegramWebhook(w http.ResponseWriter, r *http.Request) {
 	if err := decodeTelegramUpdate(w, r, &update); err != nil {
 		return
 	}
+	if update.CallbackQuery != nil {
+		s.telegramReminderCallback(w, r, *update.CallbackQuery)
+		return
+	}
 	if update.Message == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -967,7 +971,7 @@ func (s *Server) buildReminderUpdate(request updateReminderRequest) (storage.Rem
 	if request.Status != nil {
 		status := strings.TrimSpace(*request.Status)
 		if !validReminderStatus(status) {
-			return storage.ReminderUpdate{}, errors.New("status must be scheduled, delivered, or cancelled")
+			return storage.ReminderUpdate{}, errors.New("status must be scheduled, delivered, completed, or cancelled")
 		}
 		update.Status = &status
 	}
@@ -1052,7 +1056,7 @@ func validTaskStatus(value string) bool {
 
 func validReminderStatus(value string) bool {
 	switch value {
-	case "scheduled", "delivered", "cancelled":
+	case "scheduled", "delivered", "completed", "cancelled":
 		return true
 	default:
 		return false

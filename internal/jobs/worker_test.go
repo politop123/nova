@@ -17,6 +17,7 @@ import (
 type fakeReminderDeliveryStore struct {
 	reminder     storage.Reminder
 	deliverError error
+	grantError   error
 	events       []storage.ReminderDeliveryEvent
 }
 
@@ -71,7 +72,49 @@ func (s *fakeReminderDeliveryStore) ClaimReminderDeliveryAttempt(ctx context.Con
 type fakeTelegramSender struct {
 	err      error
 	messages []string
+	grants   []string
 	onSend   func()
+}
+
+func (s *fakeTelegramSender) SendReminder(ctx context.Context, chatID int64, text, grantID string) error {
+	s.grants = append(s.grants, grantID)
+	return s.SendMessage(ctx, chatID, text)
+}
+
+func (s *fakeReminderDeliveryStore) CreateReminderActionGrant(context.Context, storage.Reminder, string, string) (string, error) {
+	return "00000000-0000-0000-0000-000000000987", s.grantError
+}
+
+func TestReminderDeliveryControlPreparation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		chatID   int64
+		grantErr error
+		wantErr  bool
+		status   string
+		messages int
+	}{
+		{"database failure", 42, errors.New("grant database offline"), true, storage.ReminderDeliveryFailed, 0},
+		{"stale schedule", 42, storage.ErrReminderActionExpired, false, storage.ReminderDeliverySkipped, 0},
+		{"groups have no controls", -42, nil, false, storage.ReminderDeliverySent, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeReminderDeliveryStore{reminder: testReminder("telegram", "scheduled", time.Now().Add(-time.Minute)), grantError: tc.grantErr}
+			transport := &fakeTelegramSender{}
+			task, err := NewReminderDeliveryTask(store.reminder)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mux := Handler(slog.Default(), store, HandlerConfig{Telegram: transport, TelegramChatID: tc.chatID})
+			err = mux.ProcessTask(context.Background(), task)
+			if (err != nil) != tc.wantErr || len(transport.messages) != tc.messages || len(transport.grants) != 0 {
+				t.Fatalf("err=%v messages=%v grants=%v", err, transport.messages, transport.grants)
+			}
+			if statuses := eventStatuses(store.events); !slices.Equal(statuses, []string{storage.ReminderDeliveryAttempted, tc.status}) {
+				t.Fatalf("events=%v", statuses)
+			}
+		})
+	}
 }
 
 func (s *fakeTelegramSender) SendMessage(ctx context.Context, chatID int64, text string) error {
@@ -100,6 +143,9 @@ func TestReminderDeliveryHandlerRecordsSentEvent(t *testing.T) {
 
 	if len(telegram.messages) != 1 || !strings.Contains(telegram.messages[0], store.reminder.Title) {
 		t.Fatalf("unexpected telegram messages: %#v", telegram.messages)
+	}
+	if len(telegram.grants) != 1 || telegram.grants[0] == "" {
+		t.Fatal("private reminder missing interactive controls")
 	}
 	got := eventStatuses(store.events)
 	want := []string{storage.ReminderDeliveryAttempted, storage.ReminderDeliverySent}

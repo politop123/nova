@@ -55,6 +55,7 @@ func TestReminderDispatchIntegration(t *testing.T) {
 	r := newReminder("created before migration", now.Add(time.Hour))
 	apply("../../infrastructure/postgres/migrations/202609150001_reminder_dispatches.sql")
 	apply("../../infrastructure/postgres/migrations/202609150001_reminder_dispatches.sql")
+	apply("../../infrastructure/postgres/migrations/202609150002_reminder_action_grants.sql")
 	if durable, err := store.ReminderDispatchDurable(ctx, r); err != nil || !durable {
 		t.Fatalf("backfill failed: %v %v", durable, err)
 	}

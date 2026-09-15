@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { hasNewTelegramReply } from './utils/channel-refresh';
+import { canEditReminder, reminderLabels, type ReminderStatus } from './utils/reminder-status';
 
 const config = useRuntimeConfig();
 
@@ -52,7 +53,7 @@ interface ReminderRecord {
   recurrenceRule?: string;
   priority: 'low' | 'normal' | 'high';
   deliveryMethod: 'web' | 'telegram';
-  status: 'scheduled' | 'delivered' | 'cancelled';
+  status: ReminderStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -200,12 +201,6 @@ const statusLabels: Record<ApiState, string> = {
 const taskLabels: Record<TaskRecord['status'], string> = {
   open: 'В роботі',
   done: 'Готово',
-  cancelled: 'Скасовано',
-};
-
-const reminderLabels: Record<ReminderRecord['status'], string> = {
-  scheduled: 'Заплановано',
-  delivered: 'Доставлено',
   cancelled: 'Скасовано',
 };
 
@@ -1235,7 +1230,7 @@ function memoryKindLabel(kind: string) {
                 Історія доставки зʼявиться після спрацювання.
               </div>
             </div>
-            <div class="record-actions">
+            <div v-if="canEditReminder(reminder.status)" class="record-actions">
               <button class="ghost-button" type="button" @click="editReminder(reminder)">
                 Редагувати
               </button>

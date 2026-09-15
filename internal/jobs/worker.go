@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type ReminderDeliveryPayload struct {
 
 type TelegramSender interface {
 	SendMessage(ctx context.Context, chatID int64, text string) error
+	SendReminder(ctx context.Context, chatID int64, text, grantID string) error
 }
 
 type ReminderDeliveryStore interface {
@@ -35,6 +37,7 @@ type ReminderDeliveryStore interface {
 	DeliverReminderForSchedule(ctx context.Context, userID, reminderID string, expectedTrigger time.Time) (storage.Reminder, bool, error)
 	RecordReminderDeliveryEvent(ctx context.Context, event storage.ReminderDeliveryEvent) (storage.ReminderDeliveryEvent, error)
 	ClaimReminderDeliveryAttempt(ctx context.Context, reminder storage.Reminder, event storage.ReminderDeliveryEvent) (bool, error)
+	CreateReminderActionGrant(ctx context.Context, reminder storage.Reminder, channel, recipient string) (string, error)
 }
 
 type HandlerConfig struct {
@@ -129,7 +132,25 @@ func Handler(logger *slog.Logger, store ReminderDeliveryStore, configs ...Handle
 				}
 				return deliveryErr
 			}
-			if err := cfg.Telegram.SendMessage(ctx, cfg.TelegramChatID, formatTelegramReminder(reminder)); err != nil {
+			var sendErr error
+			if cfg.TelegramChatID > 0 {
+				grantID, err := store.CreateReminderActionGrant(ctx, reminder, "telegram", strconv.FormatInt(cfg.TelegramChatID, 10))
+				if errors.Is(err, storage.ErrReminderActionExpired) {
+					return recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliverySkipped, attempt, provider,
+						"Нагадування змінилося до підготовки кнопок.", nil)
+				}
+				if err != nil {
+					if eventErr := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliveryFailed, attempt, provider,
+						"Не вдалося підготувати керування нагадуванням.", err); eventErr != nil {
+						return errors.Join(err, eventErr)
+					}
+					return err
+				}
+				sendErr = cfg.Telegram.SendReminder(ctx, cfg.TelegramChatID, formatTelegramReminder(reminder), grantID)
+			} else {
+				sendErr = cfg.Telegram.SendMessage(ctx, cfg.TelegramChatID, formatTelegramReminder(reminder))
+			}
+			if err := sendErr; err != nil {
 				deliveryErr := fmt.Errorf("send telegram reminder: %w", err)
 				if eventErr := recordReminderDeliveryEvent(ctx, store, payload, reminder, storage.ReminderDeliveryFailed, attempt, provider, "Telegram не прийняв повідомлення.", deliveryErr); eventErr != nil {
 					return errors.Join(deliveryErr, eventErr)

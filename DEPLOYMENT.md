@@ -97,10 +97,13 @@ cd /opt/nova
 docker compose --env-file .env -f docker-compose.prod.yml up -d api worker
 curl -fsS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
   -d "url=https://nova-app.i-shevchhuukk.workers.dev/api/v1/telegram/webhook" \
-  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET" \
+  --data-urlencode 'allowed_updates=["message","callback_query"]'
 ```
 
-The webhook accepts Telegram text and voice messages. Voice input is downloaded server-side, transcribed with `OPENAI_TRANSCRIBE_MODEL`, normalized into the same NOVA conversation path as Web, and answered back through the bot. Scheduled reminders with `deliveryMethod=telegram` are delivered by the worker to `TELEGRAM_ALLOWED_CHAT_ID` or, when it is empty, `TELEGRAM_ALLOWED_USER_ID`. Keep the allowlist enabled before exposing the webhook.
+The webhook accepts Telegram text, voice, and reminder button callbacks. Voice input is downloaded server-side, transcribed with `OPENAI_TRANSCRIBE_MODEL`, normalized into the same NOVA conversation path as Web, and answered back through the bot. Scheduled reminders with `deliveryMethod=telegram` are delivered by the worker to `TELEGRAM_ALLOWED_CHAT_ID` or, when it is empty, `TELEGRAM_ALLOWED_USER_ID`. Keep the allowlist enabled before exposing the webhook.
+
+Reminder controls require a private chat, a nonempty webhook secret, and an explicit user/chat allowlist. If both allowlist values are set, they must identify the same private-chat owner. Ensure an existing webhook's `allowed_updates` includes `callback_query`; re-register with the command above if it was restricted to messages. Groups continue receiving plain reminder messages. Controls appear only on newly sent reminders, not on old Telegram messages. The additive `202609150002_reminder_action_grants.sql` migration must run before starting the new API and worker (the deploy script does this automatically).
 
 ## Domain and Cloudflare
 

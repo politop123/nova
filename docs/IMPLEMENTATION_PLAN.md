@@ -71,8 +71,8 @@ Exit: create, edit, cancel, and receive a reminder reliably across restarts.
 1. Verify the configured Telegram allowlist. **Foundation done:** the webhook checks `TELEGRAM_ALLOWED_USER_ID` and/or `TELEGRAM_ALLOWED_CHAT_ID` when configured.
 2. Normalize incoming text and voice-message transcripts into `NovaInput`. **Foundation done:** text updates route directly; voice updates are downloaded and transcribed server-side before routing.
 3. Route Telegram and Web through the same conversation service. **Foundation done:** Telegram uses the same stored conversation, planner/action execution, routing fallback, compact context, model budget, usage accounting, and message persistence path as Web.
-4. Deliver proactive reminders and confirmation buttons. **Partial:** proactive Telegram reminder delivery is wired for scheduled reminders; confirmation buttons are next.
-5. Reject replayed callbacks and untrusted users.
+4. Deliver proactive reminders and confirmation buttons. **Reminder controls done:** new private notifications have Complete and Snooze (10/60 minutes) buttons, deterministic writes and shared chat history. General-purpose CONFIRM approval buttons for sensitive external actions remain future work.
+5. Reject replayed callbacks and untrusted users. **Done for reminder controls:** webhook secret, private-chat allowlist, user-bound expiring grants, and atomic single-use execution; replaying another button cannot change the selected result.
 
 Exit: the same conversation continues between Web and Telegram, and proactive reminders arrive in Telegram.
 
@@ -80,7 +80,7 @@ Exit: the same conversation continues between Web and Telegram, and proactive re
 
 1. Add structured logs, traces, metrics, rate limits, and backups.
 2. Encrypt integration secrets and define data retention rules.
-3. Add failure drills for Redis, PostgreSQL, provider timeouts, and repeated webhook delivery. **Reminder recovery covered:** disposable PostgreSQL/Redis tests exercise unavailable connections, lost queue tasks, expired claims, cancellation/rescheduling races, archived jobs, uncertain sends, and concurrent consumers. Broader provider/webhook failure drills remain.
+3. Add failure drills for Redis, PostgreSQL, provider timeouts, and repeated webhook delivery. **Reminder recovery and controls covered:** disposable PostgreSQL/Redis tests exercise unavailable connections, lost queue tasks, expired claims, cancellation/rescheduling races, archived jobs, uncertain sends, concurrent consumers, repeated reminder callbacks, audit rollback, and callback UI failures after commit. Broader provider/webhook failure drills remain.
 4. Build cost and audit dashboards.
 5. Run the complete v0.1 acceptance suite.
 

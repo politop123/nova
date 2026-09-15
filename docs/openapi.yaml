@@ -309,7 +309,7 @@ paths:
         - name: status
           in: query
           required: false
-          schema: { type: string, enum: [scheduled, delivered, cancelled] }
+          schema: { type: string, enum: [scheduled, delivered, completed, cancelled] }
         - name: limit
           in: query
           required: false
@@ -379,7 +379,7 @@ paths:
                 recurrenceRule: { type: string }
                 priority: { type: string, enum: [low, normal, high] }
                 deliveryMethod: { type: string, enum: [web, telegram] }
-                status: { type: string, enum: [scheduled, delivered, cancelled] }
+                status: { type: string, enum: [scheduled, delivered, completed, cancelled] }
       responses:
         '200':
           description: Updated and rescheduled reminder when still scheduled.
@@ -452,7 +452,14 @@ paths:
   /api/v1/telegram/webhook:
     post:
       operationId: receiveTelegramWebhook
-      description: Receives Telegram Bot API updates, normalizes text or voice messages, and routes them through the shared NOVA Core conversation path.
+      description: >-
+        Receives Telegram Bot API text, voice, and reminder callback updates.
+        Text/voice use the shared NOVA Core conversation path. Reminder callbacks
+        execute typed owner-only completion or 10/60-minute snooze actions without AI,
+        persisting the result to the same conversation. Callbacks require a verified
+        nonempty webhook secret and private-chat allowlist; both user and chat must
+        match when both are configured. Opaque grants expire after seven days and
+        can commit only one action, including under repeated webhook delivery.
       parameters:
         - name: X-Telegram-Bot-Api-Secret-Token
           in: header
@@ -469,7 +476,7 @@ paths:
         '401':
           description: Webhook secret does not match.
         '503':
-          description: Telegram integration is not configured.
+          description: Telegram integration is not configured or a reminder action could not be persisted.
 components:
   schemas:
     HealthResponse:
@@ -619,7 +626,10 @@ components:
         recurrenceRule: { type: string }
         priority: { type: string, enum: [low, normal, high] }
         deliveryMethod: { type: string, enum: [web, telegram] }
-        status: { type: string, enum: [scheduled, delivered, cancelled] }
+        status:
+          type: string
+          enum: [scheduled, delivered, completed, cancelled]
+          description: Delivered means notification sent; completed means explicitly marked done by the user.
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     ReminderDeliveryEvent:
@@ -734,6 +744,34 @@ components:
       type: object
       properties:
         update_id: { type: integer }
+        callback_query:
+          type: object
+          properties:
+            id: { type: string }
+            from:
+              type: object
+              properties:
+                id: { type: integer }
+                is_bot: { type: boolean }
+            message:
+              type: object
+              properties:
+                message_id: { type: integer }
+                date:
+                  {
+                    type: integer,
+                    description: Zero for inaccessible messages,
+                    which cannot execute controls.,
+                  }
+                chat:
+                  type: object
+                  properties:
+                    id: { type: integer }
+                    type: { type: string }
+            data:
+              type: string
+              maxLength: 64
+              description: Opaque reminder grant callback issued in the bot's inline keyboard; not a caller-defined action payload.
         message:
           type: object
           properties:
